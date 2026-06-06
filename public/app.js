@@ -43,6 +43,8 @@
   const toast = $('#toast');
   const magnetInput = $('#magnetInput');
   const magnetBtn = $('#magnetBtn');
+  const magnetToggle = $('#magnetToggle');
+  const magnetBar = $('#magnetBar');
 
   let plyrInstance = null;
 
@@ -53,6 +55,12 @@
 
   viewToggleBtn.addEventListener('click', () => {
     setViewMode(state.viewMode === 'grid' ? 'list' : 'grid');
+  });
+
+  magnetToggle.addEventListener('click', () => {
+    magnetBar.classList.toggle('hidden');
+    magnetToggle.classList.toggle('active');
+    if (!magnetBar.classList.contains('hidden')) magnetInput.focus();
   });
 
   magnetBtn.addEventListener('click', () => {

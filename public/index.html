@@ -20,9 +20,12 @@
         <option value="tgx">TorrentGalaxy</option>
       </select>
       <button id="searchBtn">Search</button>
-      <button id="viewToggleBtn" class="view-toggle-btn hidden" title="Switch to list view">&#9776;</button>
-      <input type="text" id="magnetInput" class="magnet-input" placeholder="Paste magnet link...">
-      <button id="magnetBtn" class="magnet-btn">&#9654;</button>
+      <button id="viewToggleBtn" class="view-toggle-btn hidden" title="List view">&#9776;</button>
+      <button id="magnetToggle" class="magnet-toggle" title="Stream from magnet link">&#128279;</button>
+    </div>
+    <div id="magnetBar" class="magnet-bar hidden">
+      <input type="text" id="magnetInput" class="magnet-input" placeholder="Paste magnet link and press Enter...">
+      <button id="magnetBtn" class="magnet-btn">Stream</button>
     </div>
     <div id="cacheStatus" class="cache-status"></div>
   </header>
