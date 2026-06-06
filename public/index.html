@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Torento</title>
+  <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <a href="/" class="logo">Torento</a>
+    <div class="search-area">
+      <input type="text" id="searchInput" placeholder="Search movies, shows..." autocomplete="off">
+      <select id="sourceSelect">
+        <option value="all">All Sources</option>
+        <option value="yts">YTS</option>
+        <option value="x1337">1337x</option>
+        <option value="tpb">TPB</option>
+        <option value="tgx">TorrentGalaxy</option>
+      </select>
+      <button id="searchBtn">Search</button>
+    </div>
+    <div id="cacheStatus" class="cache-status"></div>
+  </header>
+
+  <main>
+    <div id="home" class="home-section">
+      <div id="recentSearches" class="recent-searches hidden">
+        <h2>Recent Searches</h2>
+        <div id="recentList" class="recent-list"></div>
+      </div>
+      <div id="homePlaceholder" class="placeholder">
+        <h2>Welcome to Torento</h2>
+        <p>Search for movies and shows to start streaming</p>
+      </div>
+    </div>
+
+    <div id="loading" class="loading hidden">
+      <div class="spinner"></div>
+      <p>Searching...</p>
+    </div>
+
+    <div id="errors" class="errors hidden"></div>
+
+    <div id="gallery" class="gallery hidden"></div>
+
+    <div id="detail" class="detail hidden">
+      <button class="back-btn" id="backBtn">&larr; Back to gallery</button>
+      <div id="detailContent"></div>
+    </div>
+
+    <div id="player" class="player hidden">
+      <button class="back-btn" id="playerBack">&larr; Back</button>
+      <div class="player-wrapper">
+        <video id="videoPlayer" controls crossorigin playsinline></video>
+      </div>
+      <div id="torrentStatus" class="torrent-status"></div>
+    </div>
+  </main>
+
+  <footer>
+    <span id="footerCache"></span>
+  </footer>
+
+  <script src="https://cdn.plyr.io/3.7.8/plyr.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
