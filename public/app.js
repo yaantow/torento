@@ -90,13 +90,14 @@
     setTimeout(() => toast.classList.add('hidden'), 2000);
   }
 
-  function renderFilePanel(panel, files, infoHash, meta) {
+  function renderFilePanel(panel, files, infoHash, magnet, meta) {
     panel.innerHTML = files.map(f => `
       <div class="torrent-file-item">
         <span class="torrent-file-name">${esc(f.name)}</span>
         <span class="torrent-file-size">${formatFileSize(f.size)}</span>
         <button class="play-btn torrent-file-play"
           data-infohash="${esc(infoHash)}"
+          data-magnet="${esc(magnet || '')}"
           data-index="${f.index}"
           data-name="${esc(f.name)}">Play</button>
       </div>
@@ -107,12 +108,13 @@
         const ih = fbtn.dataset.infohash;
         const idx = parseInt(fbtn.dataset.index, 10);
         const name = fbtn.dataset.name;
+        const mg = fbtn.dataset.magnet;
         showSection('player');
         startStream(ih, { index: idx, name }, {
           infoHash: null,
           title: meta?.title || name,
           poster: meta?.poster || null,
-        });
+        }, mg);
       });
     });
   }
@@ -124,7 +126,7 @@
     return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
   }
 
-  function startStream(infoHash, file, continueInfo) {
+  function startStream(infoHash, file, continueInfo, magnet) {
     const streamUrl = `/stream/${infoHash}/file/${file.index}/${encodeURIComponent(file.name)}`;
     videoPlayer.src = streamUrl;
 
@@ -140,6 +142,9 @@
 
     if (continueInfo) {
       continueInfo.infoHash = infoHash;
+      continueInfo.fileIndex = file.index;
+      continueInfo.fileName = file.name;
+      continueInfo.magnet = magnet || '';
       continueInfo.progress = 0;
       saveContinue(continueInfo);
 
@@ -149,9 +154,77 @@
         if (now - lastSave > 5000 && plyrInstance.duration) {
           lastSave = now;
           const pct = (plyrInstance.currentTime / plyrInstance.duration) * 100;
-          saveContinue({ ...continueInfo, infoHash, progress: pct });
+          saveContinue({ ...continueInfo, infoHash, fileIndex: file.index, fileName: file.name, magnet: magnet || '', progress: pct });
         }
       });
+    }
+  }
+
+  async function resumePlayback(item) {
+    showSection('player');
+    if (plyrInstance) { plyrInstance.destroy(); plyrInstance = null; }
+    torrentStatus.innerHTML = '<span>Resuming...</span>';
+    downloadBtn.classList.add('hidden');
+    copyLinkBtn.classList.add('hidden');
+    state.currentInfoHash = item.infoHash;
+
+    const resumePct = item.progress || 0;
+
+    try {
+      // Try direct stream first (torrent might be cached)
+      let streamUrl = null;
+      if (item.infoHash && item.fileIndex !== undefined && item.fileName) {
+        streamUrl = `/stream/${item.infoHash}/file/${item.fileIndex}/${encodeURIComponent(item.fileName)}`;
+        const check = await fetch(streamUrl, { method: 'HEAD' });
+        if (!check.ok) streamUrl = null;
+      }
+
+      // If not cached, re-add torrent
+      if (!streamUrl) {
+        if (!item.magnet) throw new Error('No magnet saved for this item');
+        torrentStatus.innerHTML = '<span>Re-adding torrent...</span>';
+        const resp = await fetch('/api/play', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ magnet: item.magnet }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error);
+
+        item.infoHash = data.infoHash;
+        state.currentInfoHash = data.infoHash;
+        const fi = item.fileIndex ?? 0;
+        const fname = item.fileName || data.files?.[0]?.name || 'video';
+        streamUrl = `/stream/${data.infoHash}/file/${fi}/${encodeURIComponent(fname)}`;
+      }
+
+      videoPlayer.src = streamUrl;
+
+      plyrInstance = new Plyr(videoPlayer, {
+        controls: ['play-large','play','progress','current-time','duration','mute','volume','captions','settings','pip','airplay','fullscreen'],
+        settings: ['speed','quality'],
+        speed: { selected: 1, options: [0.5,0.75,1,1.25,1.5,2] },
+      });
+
+      plyrInstance.on('ready', () => {
+        if (resumePct > 0 && plyrInstance.duration) {
+          plyrInstance.currentTime = (resumePct / 100) * plyrInstance.duration;
+        }
+      });
+
+      plyrInstance.play();
+      startTorrentPolling(item.infoHash || state.currentInfoHash);
+
+      let lastSave = 0;
+      plyrInstance.on('timeupdate', () => {
+        const now = Date.now();
+        if (now - lastSave > 5000 && plyrInstance.duration) {
+          lastSave = now;
+          const pct = (plyrInstance.currentTime / plyrInstance.duration) * 100;
+          saveContinue({ ...item, progress: pct });
+        }
+      });
+    } catch (e) {
+      torrentStatus.innerHTML = `<span style="color: #f88;">${esc(e.message)}</span>`;
     }
   }
 
@@ -465,8 +538,8 @@
     watchLaterHome.classList.toggle('hidden', items.length === 0);
     renderHomeVisibility();
 
-    watchLaterHomeList.innerHTML = items.map(item => `
-      <div class="continue-card" data-title="${esc(item.title)}">
+    watchLaterHomeList.innerHTML = items.map((item, i) => `
+      <div class="continue-card" data-index="${i}">
         <div class="continue-poster">
           ${item.poster ? `<img src="${item.poster}" alt="" onerror="this.style.display='none'">` : ''}
           <div class="continue-placeholder">${esc(item.title)}</div>
@@ -478,9 +551,45 @@
       </div>`).join('');
 
     watchLaterHomeList.querySelectorAll('.continue-card').forEach((card) => {
-      card.addEventListener('click', () => {
-        searchInput.value = card.dataset.title;
-        doSearch();
+      card.addEventListener('click', async () => {
+        const idx = parseInt(card.dataset.index, 10);
+        const item = items[idx];
+
+        // Search for the title and jump to detail view
+        showSection('loading');
+        errors.classList.add('hidden');
+        state.selected = null;
+        state.playerMovie = null;
+
+        try {
+          const resp = await fetch(`/api/search?q=${encodeURIComponent(item.title)}&source=tpb`);
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error);
+
+          state.movies = data.movies || [];
+          viewToggleBtn.classList.toggle('hidden', state.movies.length === 0);
+
+          if (state.movies.length > 0) {
+            // Find best match (same TMDB id or closest title)
+            let match = state.movies.find(m => m.metadata?.id === item.id);
+            if (!match) {
+              match = state.movies.find(m => {
+                const t = (m.metadata?.title || m.torrents[0]?.title || '').toLowerCase();
+                return t === item.title.toLowerCase();
+              });
+            }
+            if (!match) match = state.movies[0];
+
+            showDetail(match);
+            return;
+          }
+
+          showErrors(['No results found for this title.']);
+          loading.classList.add('hidden');
+        } catch (e) {
+          showErrors([e.message]);
+          loading.classList.add('hidden');
+        }
       });
     });
   }
@@ -507,10 +616,10 @@
     continueWatching.classList.toggle('hidden', items.length === 0);
     renderHomeVisibility();
 
-    continueList.innerHTML = items.map(item => {
+    continueList.innerHTML = items.map((item, i) => {
       const pct = Math.min(100, Math.max(0, item.progress || 0));
       return `
-      <div class="continue-card" data-title="${esc(item.title)}">
+      <div class="continue-card" data-index="${i}">
         <div class="continue-poster">
           ${item.poster ? `<img src="${item.poster}" alt="" onerror="this.style.display='none'">` : ''}
           <div class="continue-placeholder">${esc(item.title)}</div>
@@ -524,7 +633,10 @@
     }).join('');
 
     continueList.querySelectorAll('.continue-card').forEach((card) => {
-      card.addEventListener('click', () => { searchInput.value = card.dataset.title; doSearch(); });
+      card.addEventListener('click', () => {
+        const idx = parseInt(card.dataset.index, 10);
+        resumePlayback(items[idx]);
+      });
     });
   }
 
@@ -724,7 +836,7 @@
 
         const cached = filesCache.get(cacheKey);
         if (cached) {
-          renderFilePanel(panel, cached.files, cached.infoHash, meta);
+          renderFilePanel(panel, cached.files, cached.infoHash, cached.magnet, meta);
           panel.classList.remove('hidden');
           if (arrow) arrow.textContent = '\u25BC';
           return;
@@ -760,8 +872,8 @@
             return;
           }
 
-          filesCache.set(cacheKey, { files, infoHash: data.infoHash });
-          renderFilePanel(panel, files, data.infoHash, meta);
+          filesCache.set(cacheKey, { files, infoHash: data.infoHash, magnet: playBody.magnet });
+          renderFilePanel(panel, files, data.infoHash, playBody.magnet, meta);
         } catch (e) {
           const msg = e.message.includes('No peers')
             ? `Can't load files: no peers available. Try a higher-seed torrent or check network.`
@@ -809,7 +921,7 @@
         return;
       }
 
-      startStream(infoHash, files[0], continueInfo);
+      startStream(infoHash, files[0], continueInfo, playBody.magnet);
 
       if (data.cached) {
         downloadBtn.classList.remove('hidden');
