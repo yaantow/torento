@@ -71,7 +71,7 @@ app.post('/api/play', async (req, res) => {
         size: f.length,
         ext: path.extname(f.name).toLowerCase(),
       }))
-      .filter(f => ['.mp4', '.mkv', '.webm', '.avi', '.mov'].includes(f.ext))
+      .filter(f => ['.mp4', '.mkv', '.webm', '.avi', '.mov', '.m4v', '.ts', '.m2ts', '.wmv', '.flv'].includes(f.ext))
       .map(f => ({
         index: f.originalIndex,
         name: f.name,
@@ -230,8 +230,13 @@ function serveFromDisk(filePath, range, res) {
 app.get('/api/torrent/:infoHash/files', async (req, res) => {
   try {
     const { infoHash } = req.params;
+    const cached = streamEngine.getCachedFileList(infoHash);
+    if (cached) {
+      return res.json({ files: cached, cached: true });
+    }
+
     const magnet = findActiveMagnet(infoHash);
-    if (!magnet) return res.json({ files: [] });
+    if (!magnet) return res.json({ files: [], cached: false });
 
     const torrent = await streamEngine.getTorrent(magnet);
     const files = torrent.files.map((f, i) => ({
@@ -241,7 +246,7 @@ app.get('/api/torrent/:infoHash/files', async (req, res) => {
       progress: f.progress,
     }));
 
-    res.json({ files });
+    res.json({ files, cached: false });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

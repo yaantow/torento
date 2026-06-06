@@ -46,6 +46,8 @@
   const magnetToggle = $('#magnetToggle');
   const magnetBar = $('#magnetBar');
 
+  const filesCache = new Map();
+
   let plyrInstance = null;
 
   searchBtn.addEventListener('click', () => doSearch());
@@ -86,6 +88,33 @@
     toast.textContent = msg;
     toast.classList.remove('hidden');
     setTimeout(() => toast.classList.add('hidden'), 2000);
+  }
+
+  function renderFilePanel(panel, files, infoHash, meta) {
+    panel.innerHTML = files.map(f => `
+      <div class="torrent-file-item">
+        <span class="torrent-file-name">${esc(f.name)}</span>
+        <span class="torrent-file-size">${formatFileSize(f.size)}</span>
+        <button class="play-btn torrent-file-play"
+          data-infohash="${esc(infoHash)}"
+          data-index="${f.index}"
+          data-name="${esc(f.name)}">Play</button>
+      </div>
+    `).join('');
+
+    panel.querySelectorAll('.torrent-file-play').forEach(fbtn => {
+      fbtn.addEventListener('click', () => {
+        const ih = fbtn.dataset.infohash;
+        const idx = parseInt(fbtn.dataset.index, 10);
+        const name = fbtn.dataset.name;
+        showSection('player');
+        startStream(ih, { index: idx, name }, {
+          infoHash: null,
+          title: meta?.title || name,
+          poster: meta?.poster || null,
+        });
+      });
+    });
   }
 
   function formatFileSize(bytes) {
@@ -506,9 +535,9 @@
     homePlaceholder.classList.toggle('hidden', hasRecents || hasContinue || hasWatchLater);
   }
 
-  function showDetail(movie) {
+  function showDetail(movie, keepSeason) {
     state.selected = movie;
-    state.currentSeason = 1;
+    if (!keepSeason) state.currentSeason = 1;
     const meta = movie.metadata || {};
     const torrents = movie.torrents || [];
     const title = meta.title || (torrents[0]?.title || 'Unknown');
@@ -552,16 +581,24 @@
           const sorted = tlist.sort((a, b) => (b.seeds || 0) - (a.seeds || 0));
           const best = sorted[0];
           const epLabel = ep > 0 ? `E${String(ep).padStart(2, '0')}` : (tlist[0]?.season != null ? `S${String(tlist[0].season).padStart(2, '0')} Full` : 'Pack');
+          const isPack = ep == 0;
           return `
           <div class="episode-item">
             <div class="ep-label">${epLabel}</div>
             <div class="ep-options">${sorted.slice(0, 3).map(t => `
-              <button class="ep-play-btn torrent-play"
-                data-magnet="${esc(t.magnet || '')}" data-url="${esc(t.torrentUrl || '')}"
-                data-provider="${esc(t.provider)}" data-title="${esc(t.title || '')}"
-                data-season="${t.season ?? ''}" data-episode="${t.episode ?? ''}">
-                ${esc(t.provider)} &bull; ${esc(t.size || '?')} &bull; <span class="${(t.seeds||0)>=100?'seed-high':(t.seeds||0)>=25?'seed-mid':'seed-low'}">${t.seeds||0}s</span>
-              </button>`).join('')}
+              <div class="ep-torrent-row" data-torrent-id="ep-${ep}-${t.provider}">
+                <span class="torrent-source">${esc(t.provider)}</span>
+                <span class="torrent-size">${esc(t.size||'?')}</span>
+                <span class="${(t.seeds||0)>=100?'seed-high':(t.seeds||0)>=25?'seed-mid':'seed-low'}" style="font-size:11px;font-weight:600">${t.seeds||0} seeds</span>
+                <button class="play-btn torrent-play"
+                  data-magnet="${esc(t.magnet||'')}" data-url="${esc(t.torrentUrl||'')}"
+                  data-provider="${esc(t.provider)}" data-title="${esc(t.title||'')}"
+                  data-season="${t.season??''}" data-episode="${t.episode??''}">&#9654; Play</button>
+                ${isPack ? `<button class="action-btn secondary torrent-files-btn"
+                  data-magnet="${esc(t.magnet||'')}" data-url="${esc(t.torrentUrl||'')}"
+                  data-provider="${esc(t.provider)}" data-title="${esc(t.title||'')}">&#128193; Files</button>` : ''}
+                ${isPack ? '<div class="torrent-files-panel hidden"></div>' : ''}
+              </div>`).join('')}
             </div>
           </div>`;
         }).join('');
@@ -625,7 +662,7 @@
     if (seasonSelect) {
       seasonSelect.addEventListener('change', () => {
         state.currentSeason = parseInt(seasonSelect.value, 10);
-        showDetail(movie);
+        showDetail(movie, true);
       });
     }
 
@@ -666,26 +703,38 @@
     container.querySelectorAll('.torrent-files-btn').forEach((btn) => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        const row = btn.closest('.torrent-row');
-        const panel = row.querySelector('.torrent-files-panel');
+        let panel = btn.parentElement.querySelector('.torrent-files-panel');
+        if (!panel) {
+          const row = btn.closest('.torrent-row');
+          if (row) panel = row.querySelector('.torrent-files-panel');
+        }
+        if (!panel) return;
         const arrow = btn.querySelector('.files-arrow');
+        const magnet = btn.dataset.magnet;
+        const url = btn.dataset.url;
+        const provider = btn.dataset.provider;
+        const cacheKey = magnet || url;
 
         if (!panel.classList.contains('hidden')) {
           panel.classList.add('hidden');
           panel.innerHTML = '';
-          arrow.textContent = '\u25B6';
+          if (arrow) arrow.textContent = '\u25B6';
+          return;
+        }
+
+        const cached = filesCache.get(cacheKey);
+        if (cached) {
+          renderFilePanel(panel, cached.files, cached.infoHash, meta);
+          panel.classList.remove('hidden');
+          if (arrow) arrow.textContent = '\u25BC';
           return;
         }
 
         panel.innerHTML = '<div class="torrent-files-loading">Loading files...</div>';
         panel.classList.remove('hidden');
-        arrow.textContent = '\u25BC';
+        if (arrow) arrow.textContent = '\u25BC';
 
         try {
-          const magnet = btn.dataset.magnet;
-          const url = btn.dataset.url;
-          const provider = btn.dataset.provider;
-
           const playBody = { magnet };
           if (!magnet && url && provider) {
             const resp = await fetch('/api/magnet', {
@@ -711,32 +760,13 @@
             return;
           }
 
-          panel.innerHTML = files.map(f => `
-            <div class="torrent-file-item">
-              <span class="torrent-file-name">${esc(f.name)}</span>
-              <span class="torrent-file-size">${formatFileSize(f.size)}</span>
-              <button class="play-btn torrent-file-play"
-                data-infohash="${esc(data.infoHash)}"
-                data-index="${f.index}"
-                data-name="${esc(f.name)}">Play</button>
-            </div>
-          `).join('');
-
-          panel.querySelectorAll('.torrent-file-play').forEach(fbtn => {
-            fbtn.addEventListener('click', () => {
-              const ih = fbtn.dataset.infohash;
-              const idx = parseInt(fbtn.dataset.index, 10);
-              const name = fbtn.dataset.name;
-              showSection('player');
-              startStream(ih, { index: idx, name }, {
-                infoHash: null,
-                title: meta?.title || name,
-                poster: meta?.poster || null,
-              });
-            });
-          });
+          filesCache.set(cacheKey, { files, infoHash: data.infoHash });
+          renderFilePanel(panel, files, data.infoHash, meta);
         } catch (e) {
-          panel.innerHTML = `<div class="torrent-files-empty">${esc(e.message)}</div>`;
+          const msg = e.message.includes('No peers')
+            ? `Can't load files: no peers available. Try a higher-seed torrent or check network.`
+            : esc(e.message);
+          panel.innerHTML = `<div class="torrent-files-empty">${msg}</div>`;
         }
       });
     });

@@ -592,21 +592,54 @@ main {
 
 .ep-label { font-size: 11px; font-weight: 700; color: var(--text-muted); min-width: 36px; padding-top: 5px; }
 
-.ep-options { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; }
+.ep-options { display: flex; flex-direction: column; gap: 4px; flex: 1; }
 
-.ep-play-btn {
+.ep-torrent-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 4px 8px;
-  background: var(--bg-hover);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  color: var(--text);
-  font-size: 10px;
-  cursor: pointer;
-  transition: background 0.15s;
+  border-radius: 4px;
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+
+.ep-torrent-row .torrent-source {
+  font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px;
+  padding: 1px 5px; border-radius: 2px;
+  background: rgba(229,9,20,0.12); color: var(--accent);
   white-space: nowrap;
 }
 
-.ep-play-btn:hover { background: var(--accent); border-color: var(--accent); }
+.ep-torrent-row .torrent-size { color: var(--text-muted); white-space: nowrap; }
+
+.ep-torrent-row .play-btn {
+  padding: 3px 10px;
+  font-size: 10px;
+}
+
+.ep-torrent-row .action-btn.secondary {
+  padding: 3px 8px;
+  font-size: 10px;
+}
+
+.ep-torrent-row .torrent-files-panel {
+  width: 100%;
+  margin-top: 2px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px 6px;
+}
+
+.ep-torrent-row .torrent-files-panel {
+  width: 100%;
+  margin-top: 2px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px 6px;
+}
 
 /* ========== BACK ========== */
 
