@@ -247,6 +247,25 @@ app.get('/api/torrent/:infoHash/files', async (req, res) => {
   }
 });
 
+app.get('/api/download/:infoHash', (req, res) => {
+  try {
+    const { infoHash } = req.params;
+    const cached = cacheManager.getCached(infoHash);
+    if (!cached) return res.status(404).json({ error: 'File not cached. Wait for download to complete.' });
+
+    const filePath = cached.filePath;
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Cached file not found on disk.' });
+
+    cacheManager.touchCache(infoHash);
+    const fileName = path.basename(filePath);
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    fs.createReadStream(filePath).pipe(res);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/cache', (req, res) => {
   const size = cacheManager.getCacheSize();
   const files = cacheManager.getCacheFiles();

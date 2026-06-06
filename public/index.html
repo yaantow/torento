@@ -20,12 +20,23 @@
         <option value="tgx">TorrentGalaxy</option>
       </select>
       <button id="searchBtn">Search</button>
+      <button id="viewToggleBtn" class="view-toggle-btn hidden" title="Switch to list view">&#9776;</button>
+      <input type="text" id="magnetInput" class="magnet-input" placeholder="Paste magnet link...">
+      <button id="magnetBtn" class="magnet-btn">&#9654;</button>
     </div>
     <div id="cacheStatus" class="cache-status"></div>
   </header>
 
   <main>
     <div id="home" class="home-section">
+      <div id="continueWatching" class="continue-watching hidden">
+        <h2>Continue Watching</h2>
+        <div id="continueList" class="continue-list"></div>
+      </div>
+      <div id="watchLaterHome" class="continue-watching hidden">
+        <h2>Watch Later</h2>
+        <div id="watchLaterHomeList" class="continue-list"></div>
+      </div>
       <div id="recentSearches" class="recent-searches hidden">
         <h2>Recent Searches</h2>
         <div id="recentList" class="recent-list"></div>
@@ -44,9 +55,10 @@
     <div id="errors" class="errors hidden"></div>
 
     <div id="gallery" class="gallery hidden"></div>
+    <div id="listView" class="list-view hidden"></div>
 
     <div id="detail" class="detail hidden">
-      <button class="back-btn" id="backBtn">&larr; Back to gallery</button>
+      <button class="back-btn" id="backBtn">&larr; Back to results</button>
       <div id="detailContent"></div>
     </div>
 
@@ -55,6 +67,10 @@
       <div class="player-wrapper">
         <video id="videoPlayer" controls crossorigin playsinline></video>
       </div>
+      <div class="player-actions">
+        <button id="downloadBtn" class="action-btn hidden">Download</button>
+        <button id="copyLinkBtn" class="action-btn hidden">Copy Stream Link</button>
+      </div>
       <div id="torrentStatus" class="torrent-status"></div>
     </div>
   </main>
@@ -62,6 +78,8 @@
   <footer>
     <span id="footerCache"></span>
   </footer>
+
+  <div id="toast" class="toast hidden"></div>
 
   <script src="https://cdn.plyr.io/3.7.8/plyr.js"></script>
   <script src="/app.js"></script>
