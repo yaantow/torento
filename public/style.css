@@ -488,6 +488,8 @@ main {
 
 .action-btn.secondary:hover { border-color: var(--accent); color: var(--text); }
 
+.action-btn.disabled { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
+
 .torrent-files-btn { flex-shrink: 0; display: flex; align-items: center; gap: 3px; }
 
 .files-arrow {

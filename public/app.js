@@ -38,6 +38,8 @@
   const continueList = $('#continueList');
   const watchLaterHome = $('#watchLaterHome');
   const watchLaterHomeList = $('#watchLaterHomeList');
+  const localCache = $('#localCache');
+  const localCacheList = $('#localCacheList');
   const downloadBtn = $('#downloadBtn');
   const copyLinkBtn = $('#copyLinkBtn');
   const toast = $('#toast');
@@ -47,6 +49,7 @@
   const magnetBar = $('#magnetBar');
 
   const filesCache = new Map();
+  let torrentCached = false;
 
   let plyrInstance = null;
 
@@ -164,9 +167,11 @@
     showSection('player');
     if (plyrInstance) { plyrInstance.destroy(); plyrInstance = null; }
     torrentStatus.innerHTML = '<span>Resuming...</span>';
-    downloadBtn.classList.add('hidden');
-    copyLinkBtn.classList.add('hidden');
-    state.currentInfoHash = item.infoHash;
+    copyLinkBtn.classList.remove('hidden');
+    downloadBtn.classList.remove('hidden');
+    torrentCached = false;
+    updateDownloadButton();
+    state.currentInfoHash = item.infoHash || null;
 
     const resumePct = item.progress || 0;
 
@@ -644,7 +649,46 @@
     const hasRecents = loadRecent().length > 0;
     const hasContinue = loadContinue().length > 0;
     const hasWatchLater = loadWatchLater().length > 0;
-    homePlaceholder.classList.toggle('hidden', hasRecents || hasContinue || hasWatchLater);
+    const hasLocalCache = localCacheList.children.length > 0;
+    homePlaceholder.classList.toggle('hidden', hasRecents || hasContinue || hasWatchLater || hasLocalCache);
+  }
+
+  async function renderLocalCache() {
+    try {
+      const resp = await fetch('/api/cache');
+      const data = await resp.json();
+      const files = data.files || [];
+      localCache.classList.toggle('hidden', files.length === 0);
+      renderHomeVisibility();
+
+      localCacheList.innerHTML = files.map(f => `
+        <div class="continue-card" data-infohash="${esc(f.infoHash)}" data-filename="${esc(f.fileName)}">
+          <div class="continue-poster">
+            <div class="continue-placeholder">${esc(f.fileName)}</div>
+          </div>
+          <div class="continue-info">
+            <div class="continue-title">${esc(f.fileName)}</div>
+            <div class="continue-meta">${formatFileSize(f.size)} &bull; cached</div>
+          </div>
+        </div>`).join('');
+
+      localCacheList.querySelectorAll('.continue-card').forEach(card => {
+        card.addEventListener('click', () => {
+          const ih = card.dataset.infohash;
+          const fn = card.dataset.filename;
+          showSection('player');
+          startStream(ih, { index: 0, name: fn }, {
+            infoHash: null,
+            title: fn,
+            poster: null,
+          }, '');
+          copyLinkBtn.classList.remove('hidden');
+          downloadBtn.classList.remove('hidden');
+          torrentCached = true;
+          updateDownloadButton();
+        });
+      });
+    } catch {}
   }
 
   function showDetail(movie, keepSeason) {
@@ -889,7 +933,7 @@
     if (plyrInstance) { plyrInstance.destroy(); plyrInstance = null; }
     torrentStatus.innerHTML = '<span>Fetching torrent info...</span>';
     downloadBtn.classList.add('hidden');
-    copyLinkBtn.classList.add('hidden');
+    copyLinkBtn.classList.remove('hidden');
     state.currentInfoHash = null;
 
     try {
@@ -921,21 +965,20 @@
         return;
       }
 
-      startStream(infoHash, files[0], continueInfo, playBody.magnet);
-
-      if (data.cached) {
-        downloadBtn.classList.remove('hidden');
-        copyLinkBtn.classList.remove('hidden');
-      }
+      startStream(data.infoHash, files[0], continueInfo, playBody.magnet);
+      copyLinkBtn.classList.remove('hidden');
+      torrentCached = !!data.cached;
+      downloadBtn.classList.remove('hidden');
+      updateDownloadButton();
 
       const checkCache = setInterval(async () => {
         try {
           const cr = await fetch('/api/cache');
           const cd = await cr.json();
           const cached = cd.files?.some(f => f.infoHash === data.infoHash);
-          if (cached) {
-            downloadBtn.classList.remove('hidden');
-            copyLinkBtn.classList.remove('hidden');
+          if (cached && !torrentCached) {
+            torrentCached = true;
+            updateDownloadButton();
             clearInterval(checkCache);
           }
         } catch {}
@@ -946,11 +989,25 @@
     }
   }
 
-  downloadBtn.addEventListener('click', () => {
-    if (state.currentInfoHash) {
-      window.open(`/api/download/${state.currentInfoHash}`, '_blank');
-      showToast('Download started');
+  function updateDownloadButton() {
+    if (torrentCached) {
+      downloadBtn.textContent = 'Download';
+      downloadBtn.classList.remove('disabled');
+      downloadBtn.title = 'Download cached file to your device';
+    } else {
+      downloadBtn.textContent = 'Caching...';
+      downloadBtn.classList.add('disabled');
+      downloadBtn.title = 'File is still caching to disk...';
     }
+  }
+
+  downloadBtn.addEventListener('click', () => {
+    if (!torrentCached || !state.currentInfoHash) {
+      showToast('File is still caching. Wait for download to complete.');
+      return;
+    }
+    window.open(`/api/download/${state.currentInfoHash}`, '_blank');
+    showToast('Download started');
   });
 
   copyLinkBtn.addEventListener('click', async () => {
@@ -983,6 +1040,10 @@
           const downloaded = data.files.reduce((s, f) => s + f.size * (f.progress || 0), 0);
           const pct = total > 0 ? ((downloaded / total) * 100).toFixed(1) : 0;
           torrentStatus.innerHTML = `<span>Progress: ${pct}%</span><span>Files: ${data.files.length}</span><span style="color:var(--text-muted)">Streaming...</span>`;
+
+          if (!torrentCached) {
+            downloadBtn.textContent = pct >= 99.9 ? 'Caching...' : `Caching ${pct}%`;
+          }
         }
       } catch {}
     };
@@ -996,6 +1057,8 @@
     if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
     videoPlayer.src = '';
     downloadBtn.classList.add('hidden');
+    downloadBtn.textContent = 'Download';
+    torrentCached = false;
     copyLinkBtn.classList.add('hidden');
     state.selected = null;
     state.playerMovie = null;
@@ -1029,6 +1092,7 @@
   renderRecent();
   renderContinue();
   renderWatchLater();
+  renderLocalCache();
   renderHomeVisibility();
   showSection('home');
 })();
