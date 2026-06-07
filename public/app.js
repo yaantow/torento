@@ -61,7 +61,30 @@
   searchBtn.addEventListener('click', () => doSearch());
   searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
   $('#backBtn').addEventListener('click', showGallery);
-  $('#playerBack').addEventListener('click', showGallery);
+  $('#playerBack').addEventListener('click', goBackFromPlayer);
+
+  function goBackFromPlayer() {
+    if (plyrInstance) { plyrInstance.destroy(); plyrInstance = null; }
+    if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+    videoPlayer.src = '';
+    downloadBtn.classList.add('hidden');
+    downloadBtn.textContent = 'Download';
+    copyLinkBtn.classList.add('hidden');
+    torrentCached = false;
+    state.playerMovie = null;
+    state.currentInfoHash = null;
+
+    if (state.selected) {
+      showDetail(state.selected, true);
+    } else if (state.movies.length > 0) {
+      showSection('gallery');
+      if (state.viewMode === 'grid') gallery.classList.remove('hidden');
+      else listView.classList.remove('hidden');
+    } else {
+      viewToggleBtn.classList.add('hidden');
+      showSection('home');
+    }
+  }
 
   viewToggleBtn.addEventListener('click', () => {
     setViewMode(state.viewMode === 'grid' ? 'list' : 'grid');
@@ -197,6 +220,8 @@
         const idx = parseInt(fbtn.dataset.index, 10);
         const name = fbtn.dataset.name;
         const mg = fbtn.dataset.magnet;
+        if (plyrInstance) { plyrInstance.destroy(); plyrInstance = null; }
+        videoPlayer.src = '';
         showSection('player');
         startStream(ih, { index: idx, name }, {
           infoHash: null,
@@ -216,9 +241,11 @@
 
   function startStream(infoHash, file, continueInfo, magnet) {
     const streamUrl = `/stream/${infoHash}/file/${file.index}/${encodeURIComponent(file.name)}`;
-    videoPlayer.src = streamUrl;
 
     if (plyrInstance) plyrInstance.destroy();
+    plyrInstance = null;
+    videoPlayer.src = '';
+    videoPlayer.src = streamUrl;
     plyrInstance = new Plyr(videoPlayer, {
       controls: ['play-large','play','progress','current-time','duration','mute','volume','captions','settings','pip','airplay','fullscreen'],
       settings: ['speed','quality'],
@@ -287,6 +314,9 @@
         streamUrl = `/stream/${data.infoHash}/file/${fi}/${encodeURIComponent(fname)}`;
       }
 
+      if (plyrInstance) plyrInstance.destroy();
+      plyrInstance = null;
+      videoPlayer.src = '';
       videoPlayer.src = streamUrl;
 
       plyrInstance = new Plyr(videoPlayer, {
