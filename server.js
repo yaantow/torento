@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const config = require('./config');
 const cacheManager = require('./lib/cache/manager');
+const queueManager = require('./lib/cache/queue');
 const streamEngine = require('./lib/stream/engine');
 const searchEngine = require('./lib/search');
 
@@ -12,6 +13,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 (async () => {
   cacheManager.init();
+  queueManager.init();
   await streamEngine.init();
 
   app.listen(config.port, () => {
@@ -247,6 +249,40 @@ app.get('/api/torrent/:infoHash/files', async (req, res) => {
     }));
 
     res.json({ files, cached: false });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/queue', async (req, res) => {
+  try {
+    const { magnet, title } = req.body;
+    if (!magnet) return res.status(400).json({ error: 'Missing magnet' });
+
+    const infoHash = streamEngine.extractInfoHash(magnet);
+    if (!infoHash) return res.status(400).json({ error: 'Invalid magnet URI' });
+
+    queueManager.addItem(infoHash, magnet, title || infoHash);
+    streamEngine.getTorrent(magnet).catch((e) => {
+      queueManager.markError(infoHash, e.message);
+    });
+
+    res.json({ infoHash, queued: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/queue', (req, res) => {
+  res.json({ items: queueManager.getItems() });
+});
+
+app.delete('/api/queue/:infoHash', (req, res) => {
+  try {
+    const { infoHash } = req.params;
+    queueManager.removeItem(infoHash);
+    cacheManager.removeFromCache(infoHash);
+    res.json({ removed: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

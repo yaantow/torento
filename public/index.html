@@ -22,6 +22,7 @@
       <button id="searchBtn">Search</button>
       <button id="viewToggleBtn" class="view-toggle-btn hidden" title="List view">&#9776;</button>
       <button id="magnetToggle" class="magnet-toggle" title="Stream from magnet link">&#128279;</button>
+      <button id="queueNavBtn" class="queue-nav-btn" title="Queue">&#128190; <span id="queueCount" class="queue-count hidden"></span></button>
     </div>
     <div id="magnetBar" class="magnet-bar hidden">
       <input type="text" id="magnetInput" class="magnet-input" placeholder="Paste magnet link and press Enter...">
@@ -79,6 +80,12 @@
         <button id="copyLinkBtn" class="action-btn hidden">Copy Stream Link</button>
       </div>
       <div id="torrentStatus" class="torrent-status"></div>
+    </div>
+
+    <div id="queuePage" class="queue-page hidden">
+      <button class="back-btn" id="queueBack">&larr; Back</button>
+      <h2 style="font-size:1.2rem;font-weight:600;margin-bottom:14px;">Download Queue</h2>
+      <div id="queueList" class="torrent-list"></div>
     </div>
   </main>
 

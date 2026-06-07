@@ -40,6 +40,11 @@
   const watchLaterHomeList = $('#watchLaterHomeList');
   const localCache = $('#localCache');
   const localCacheList = $('#localCacheList');
+  const queueNavBtn = $('#queueNavBtn');
+  const queueCount = $('#queueCount');
+  const queuePage = $('#queuePage');
+  const queueList = $('#queueList');
+  const queueBack = $('#queueBack');
   const downloadBtn = $('#downloadBtn');
   const copyLinkBtn = $('#copyLinkBtn');
   const toast = $('#toast');
@@ -78,6 +83,86 @@
   magnetInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') magnetBtn.click();
   });
+
+  queueNavBtn.addEventListener('click', showQueuePage);
+  queueBack.addEventListener('click', () => showSection('home'));
+
+  function showQueuePage() {
+    showSection('queue');
+    renderQueue();
+  }
+
+  async function addToQueue(magnet, title) {
+    try {
+      const resp = await fetch('/api/queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ magnet, title }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error);
+      showToast('Added to queue');
+      updateQueueCount();
+      return data;
+    } catch (e) {
+      showToast('Failed to queue: ' + e.message);
+    }
+  }
+
+  async function renderQueue() {
+    try {
+      const resp = await fetch('/api/queue');
+      const data = await resp.json();
+      const items = data.items || [];
+
+      queueList.innerHTML = items.length === 0
+        ? '<div class="torrent-files-empty">No items in queue. Click the &#128229; button next to any torrent to queue it for download.</div>'
+        : items.map(item => `
+          <div class="queue-item">
+            <span class="queue-item-name">${esc(item.title)}</span>
+            <span class="queue-item-status ${item.status}">${item.status === 'cached' ? 'Cached' : item.status === 'error' ? 'Error' : item.progress + '%'}</span>
+            ${item.status === 'downloading' ? `<div class="queue-progress"><div class="queue-progress-fill" style="width:${item.progress}%"></div></div>` : ''}
+            ${item.status === 'cached' ? `<button class="play-btn queue-play-btn" data-infohash="${esc(item.infoHash)}" data-magnet="${esc(item.magnet||'')}">Play</button>` : ''}
+            <button class="queue-delete-btn" data-infohash="${esc(item.infoHash)}">Delete</button>
+          </div>
+        `).join('');
+
+      queueList.querySelectorAll('.queue-play-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const ih = btn.dataset.infohash;
+          const magnet = btn.dataset.magnet;
+          showSection('player');
+          startStream(ih, { index: 0, name: 'cached-video' }, {
+            infoHash: null, title: 'Cached', poster: null,
+          }, magnet);
+          copyLinkBtn.classList.remove('hidden');
+          downloadBtn.classList.remove('hidden');
+          torrentCached = true;
+          updateDownloadButton();
+        });
+      });
+
+      queueList.querySelectorAll('.queue-delete-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const ih = btn.dataset.infohash;
+          await fetch(`/api/queue/${ih}`, { method: 'DELETE' });
+          renderQueue();
+          updateQueueCount();
+          showToast('Removed from queue');
+        });
+      });
+
+      updateQueueCount();
+    } catch {}
+  }
+
+  function updateQueueCount() {
+    fetch('/api/queue').then(r => r.json()).then(data => {
+      const count = (data.items || []).filter(i => i.status === 'downloading').length;
+      queueCount.textContent = count;
+      queueCount.classList.toggle('hidden', count === 0);
+    }).catch(() => {});
+  }
 
   function setViewMode(mode) {
     state.viewMode = mode;
@@ -287,12 +372,14 @@
     detail.classList.add('hidden');
     player.classList.add('hidden');
     loading.classList.add('hidden');
+    queuePage.classList.add('hidden');
 
     if (section === 'home') homeSection.classList.remove('hidden');
     if (section === 'loading') loading.classList.remove('hidden');
     if (section === 'gallery') { if (state.viewMode === 'grid') gallery.classList.remove('hidden'); else listView.classList.remove('hidden'); }
     if (section === 'detail') detail.classList.remove('hidden');
     if (section === 'player') player.classList.remove('hidden');
+    if (section === 'queue') queuePage.classList.remove('hidden');
   }
 
   function renderResults() {
@@ -753,6 +840,8 @@
                 ${isPack ? `<button class="action-btn secondary torrent-files-btn"
                   data-magnet="${esc(t.magnet||'')}" data-url="${esc(t.torrentUrl||'')}"
                   data-provider="${esc(t.provider)}" data-title="${esc(t.title||'')}">&#128193; Files</button>` : ''}
+                <button class="action-btn secondary queue-add-btn"
+                  data-magnet="${esc(t.magnet||'')}" data-title="${esc(t.title||'')}">&#128229;</button>
                 ${isPack ? '<div class="torrent-files-panel hidden"></div>' : ''}
               </div>`).join('')}
             </div>
@@ -786,6 +875,8 @@
               <button class="action-btn secondary torrent-files-btn"
                 data-magnet="${esc(t.magnet||'')}" data-url="${esc(t.torrentUrl||'')}"
                 data-provider="${esc(t.provider)}" data-title="${esc(t.title||'')}"><span class="files-arrow">&#9654;</span> Files</button>
+              <button class="action-btn secondary queue-add-btn"
+                data-magnet="${esc(t.magnet||'')}" data-title="${esc(t.title||'')}">&#128229;</button>
             </div>
             <div class="torrent-files-panel hidden"></div>
           </div>`;
@@ -924,6 +1015,16 @@
             : esc(e.message);
           panel.innerHTML = `<div class="torrent-files-empty">${msg}</div>`;
         }
+      });
+    });
+
+    container.querySelectorAll('.queue-add-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const magnet = btn.dataset.magnet;
+        const title = btn.dataset.title;
+        if (magnet) addToQueue(magnet, title);
+        else showToast('No magnet link available');
       });
     });
   }
@@ -1093,6 +1194,7 @@
   renderContinue();
   renderWatchLater();
   renderLocalCache();
+  updateQueueCount();
   renderHomeVisibility();
   showSection('home');
 })();

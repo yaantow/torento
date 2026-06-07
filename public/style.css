@@ -123,6 +123,37 @@ header > .logo {
 .magnet-toggle:hover { color: var(--accent2); }
 .magnet-toggle.active { color: var(--accent2); border-color: var(--accent2); }
 
+.queue-nav-btn {
+  padding: 7px 9px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  position: relative;
+  transition: color 0.15s;
+}
+
+.queue-nav-btn:hover { color: var(--text); }
+
+.queue-count {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .cache-status {
   float: right;
   font-size: 11px;
@@ -490,6 +521,11 @@ main {
 
 .action-btn.disabled { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
 
+.queue-add-btn {
+  font-size: 11px;
+  padding: 5px 8px;
+}
+
 .torrent-files-btn { flex-shrink: 0; display: flex; align-items: center; gap: 3px; }
 
 .files-arrow {
@@ -642,6 +678,70 @@ main {
   border-radius: 4px;
   padding: 4px 6px 6px;
 }
+
+/* ========== QUEUE PAGE ========== */
+
+.queue-page {
+  padding: 4px 0;
+}
+
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+
+.queue-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-item-status {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.queue-item-status.cached { background: rgba(76,175,80,0.15); color: #4caf50; }
+.queue-item-status.downloading { background: rgba(255,152,0,0.15); color: #ff9800; }
+.queue-item-status.error { background: rgba(244,67,54,0.15); color: #f44336; }
+
+.queue-progress {
+  width: 100px;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.queue-progress-fill {
+  height: 100%;
+  background: var(--accent2);
+  border-radius: 2px;
+  transition: width 0.3s;
+}
+
+.queue-delete-btn {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.queue-delete-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 /* ========== BACK ========== */
 
