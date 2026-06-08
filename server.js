@@ -6,6 +6,7 @@ const cacheManager = require('./lib/cache/manager');
 const queueManager = require('./lib/cache/queue');
 const streamEngine = require('./lib/stream/engine');
 const searchEngine = require('./lib/search');
+const VIDEO_EXTS = require('./lib/videoExts');
 
 const app = express();
 app.use(express.json());
@@ -73,7 +74,7 @@ app.post('/api/play', async (req, res) => {
         size: f.length,
         ext: path.extname(f.name).toLowerCase(),
       }))
-      .filter(f => ['.mp4', '.mkv', '.webm', '.avi', '.mov', '.m4v', '.ts', '.m2ts', '.wmv', '.flv'].includes(f.ext))
+      .filter(f => VIDEO_EXTS.includes(f.ext))
       .map(f => ({
         index: f.originalIndex,
         name: f.name,
@@ -91,31 +92,6 @@ app.post('/api/play', async (req, res) => {
       cached: !!cached,
       progress: torrent.progress,
       downloadSpeed: torrent.downloadSpeed,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/playback', async (req, res) => {
-  try {
-    const { magnet, fileIndex } = req.body;
-    if (!magnet) return res.status(400).json({ error: 'Missing magnet' });
-
-    const infoHash = streamEngine.extractInfoHash(magnet);
-    if (!infoHash) return res.status(400).json({ error: 'Could not extract info hash' });
-
-    const idx = parseInt(fileIndex, 10) || 0;
-    const torrent = await streamEngine.getTorrent(magnet);
-    if (!torrent) throw new Error('Failed to add torrent');
-    const file = torrent.files[idx];
-
-    if (!file) return res.status(404).json({ error: 'File not found at index ' + idx });
-
-    const name = encodeURIComponent(file.name);
-    res.json({
-      streamUrl: `/stream/${torrent.infoHash}/file/${idx}/${name}`,
-      infoHash: torrent.infoHash,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -269,6 +245,7 @@ app.post('/api/queue', async (req, res) => {
 
     res.json({ infoHash, queued: true });
   } catch (err) {
+    console.log('[queue] POST error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

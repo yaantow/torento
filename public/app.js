@@ -6,6 +6,7 @@
     currentSeason: 1,
     viewMode: 'grid',
     currentInfoHash: null,
+    _queueInterval: null,
   };
 
   const RECENT_KEY = 'torento_recent';
@@ -113,6 +114,8 @@
   function showQueuePage() {
     showSection('queue');
     renderQueue();
+    if (state._queueInterval) clearInterval(state._queueInterval);
+    state._queueInterval = setInterval(renderQueue, 5000);
   }
 
   async function addToQueue(magnet, title, fileIndex, fileName) {
@@ -146,7 +149,7 @@
         : items.map(item => `
           <div class="queue-item">
             <span class="queue-item-name">${esc(item.fileName || item.title)}</span>
-            <span class="queue-item-status ${item.status}">${item.status === 'cached' ? 'Cached' : item.status === 'error' ? 'Error' : item.progress + '%'}</span>
+            <span class="queue-item-status ${item.status}">${item.status === 'cached' ? 'Cached' : item.status === 'error' ? 'Error' : (Number(item.progress) || 0).toFixed(1) + '%'}</span>
             ${item.status === 'downloading' ? `<div class="queue-progress"><div class="queue-progress-fill" style="width:${item.progress}%"></div></div>` : ''}
             ${item.status === 'cached' ? `<button class="play-btn queue-play-btn" data-infohash="${esc(item.infoHash)}" data-magnet="${esc(item.magnet||'')}" data-fileindex="${item.fileIndex ?? 0}" data-filename="${esc(item.fileName || 'cached-video')}">Play</button>` : ''}
             <button class="queue-delete-btn" data-infohash="${esc(item.infoHash)}">Delete</button>
@@ -430,6 +433,7 @@
     if (section === 'detail') detail.classList.remove('hidden');
     if (section === 'player') player.classList.remove('hidden');
     if (section === 'queue') queuePage.classList.remove('hidden');
+    else if (state._queueInterval) { clearInterval(state._queueInterval); state._queueInterval = null; }
   }
 
   function renderResults() {
