@@ -115,12 +115,15 @@
     renderQueue();
   }
 
-  async function addToQueue(magnet, title) {
+  async function addToQueue(magnet, title, fileIndex, fileName) {
     try {
+      const body = { magnet, title };
+      if (fileIndex !== undefined) body.fileIndex = fileIndex;
+      if (fileName) body.fileName = fileName;
       const resp = await fetch('/api/queue', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ magnet, title }),
+        body: JSON.stringify(body),
       });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error);
@@ -142,10 +145,10 @@
         ? '<div class="torrent-files-empty">No items in queue. Click the &#128229; button next to any torrent to queue it for download.</div>'
         : items.map(item => `
           <div class="queue-item">
-            <span class="queue-item-name">${esc(item.title)}</span>
+            <span class="queue-item-name">${esc(item.fileName || item.title)}</span>
             <span class="queue-item-status ${item.status}">${item.status === 'cached' ? 'Cached' : item.status === 'error' ? 'Error' : item.progress + '%'}</span>
             ${item.status === 'downloading' ? `<div class="queue-progress"><div class="queue-progress-fill" style="width:${item.progress}%"></div></div>` : ''}
-            ${item.status === 'cached' ? `<button class="play-btn queue-play-btn" data-infohash="${esc(item.infoHash)}" data-magnet="${esc(item.magnet||'')}">Play</button>` : ''}
+            ${item.status === 'cached' ? `<button class="play-btn queue-play-btn" data-infohash="${esc(item.infoHash)}" data-magnet="${esc(item.magnet||'')}" data-fileindex="${item.fileIndex ?? 0}" data-filename="${esc(item.fileName || 'cached-video')}">Play</button>` : ''}
             <button class="queue-delete-btn" data-infohash="${esc(item.infoHash)}">Delete</button>
           </div>
         `).join('');
@@ -154,9 +157,11 @@
         btn.addEventListener('click', async () => {
           const ih = btn.dataset.infohash;
           const magnet = btn.dataset.magnet;
+          const fi = parseInt(btn.dataset.fileindex) || 0;
+          const fn = btn.dataset.filename;
           showSection('player');
-          startStream(ih, { index: 0, name: 'cached-video' }, {
-            infoHash: null, title: 'Cached', poster: null,
+          startStream(ih, { index: fi, name: fn }, {
+            infoHash: null, title: fn, poster: null,
           }, magnet);
           copyLinkBtn.classList.remove('hidden');
           downloadBtn.classList.remove('hidden');
@@ -211,6 +216,10 @@
           data-magnet="${esc(magnet || '')}"
           data-index="${f.index}"
           data-name="${esc(f.name)}">Play</button>
+        <button class="action-btn secondary queue-add-btn"
+          data-magnet="${esc(magnet || '')}"
+          data-fileindex="${f.index}"
+          data-title="${esc(f.name)}">&#128229;</button>
       </div>
     `).join('');
 
@@ -228,6 +237,17 @@
           title: meta?.title || name,
           poster: meta?.poster || null,
         }, mg);
+      });
+    });
+
+    panel.querySelectorAll('.queue-add-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const mg = btn.dataset.magnet;
+        const title = btn.dataset.title;
+        const fi = parseInt(btn.dataset.fileindex);
+        if (mg) addToQueue(mg, title, isNaN(fi) ? undefined : fi, title);
+        else showToast('No magnet link available');
       });
     });
   }
@@ -1053,7 +1073,8 @@
         e.stopPropagation();
         const magnet = btn.dataset.magnet;
         const title = btn.dataset.title;
-        if (magnet) addToQueue(magnet, title);
+        const fi = parseInt(btn.dataset.fileindex);
+        if (magnet) addToQueue(magnet, title, isNaN(fi) ? undefined : fi, title);
         else showToast('No magnet link available');
       });
     });

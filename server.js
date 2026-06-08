@@ -256,14 +256,14 @@ app.get('/api/torrent/:infoHash/files', async (req, res) => {
 
 app.post('/api/queue', async (req, res) => {
   try {
-    const { magnet, title } = req.body;
+    const { magnet, title, fileIndex, fileName } = req.body;
     if (!magnet) return res.status(400).json({ error: 'Missing magnet' });
 
     const infoHash = streamEngine.extractInfoHash(magnet);
     if (!infoHash) return res.status(400).json({ error: 'Invalid magnet URI' });
 
-    queueManager.addItem(infoHash, magnet, title || infoHash);
-    streamEngine.getTorrent(magnet).catch((e) => {
+    queueManager.addItem(infoHash, magnet, title || infoHash, fileIndex, fileName);
+    streamEngine.getTorrent(magnet, { fileIndex }).catch((e) => {
       queueManager.markError(infoHash, e.message);
     });
 
