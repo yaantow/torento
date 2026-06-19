@@ -6,6 +6,7 @@ const cacheManager = require('./lib/cache/manager');
 const queueManager = require('./lib/cache/queue');
 const streamEngine = require('./lib/stream/engine');
 const searchEngine = require('./lib/search');
+const trackers = require('./lib/search/trackers');
 const VIDEO_EXTS = require('./lib/videoExts');
 
 const app = express();
@@ -51,7 +52,7 @@ app.post('/api/magnet', async (req, res) => {
 
 app.post('/api/play', async (req, res) => {
   try {
-    const { magnet, provider, torrentUrl } = req.body;
+    const { magnet, provider, torrentUrl, preview } = req.body;
 
     let finalMagnet = magnet;
     if (!finalMagnet && provider && torrentUrl) {
@@ -64,8 +65,18 @@ app.post('/api/play', async (req, res) => {
     const infoHash = streamEngine.extractInfoHash(finalMagnet);
     if (!infoHash) return res.status(400).json({ error: 'Could not extract info hash from magnet' });
 
+    if (!finalMagnet.includes('&tr=')) {
+      finalMagnet += trackers.map(t => '&tr=' + encodeURIComponent(t)).join('');
+    }
+
     const torrent = await streamEngine.getTorrent(finalMagnet);
     if (!torrent) throw new Error('Failed to add torrent');
+
+    if (preview) {
+      for (const file of torrent.files) {
+        try { file.deselect(); } catch {}
+      }
+    }
 
     const files = torrent.files
       .map((f, i) => ({
@@ -100,21 +111,23 @@ app.post('/api/play', async (req, res) => {
 
 app.get('/stream/:infoHash/file/:fileIndex/:filename', async (req, res) => {
   try {
-    const { infoHash, fileIndex } = req.params;
+    const { infoHash, fileIndex, filename } = req.params;
     const range = req.headers.range;
     const idx = parseInt(fileIndex, 10);
 
-    const cached = cacheManager.getCached(infoHash);
+    const cached = cacheManager.getCached(infoHash, filename);
     if (cached) {
+      console.log(`[stream] DISK: ${filename} (${infoHash.slice(0, 8)})`);
       cacheManager.touchCache(infoHash);
       serveFromDisk(cached.filePath, range, res);
       return;
     }
 
+    console.log(`[stream] TORRENT: ${filename} (${infoHash.slice(0, 8)}) — not found in cache`);
     const magnet = findActiveMagnet(infoHash);
-    if (!magnet) return res.status(404).json({ error: 'Torrent not found' });
+    if (!magnet) return res.status(404).json({ error: 'Torrent not found. File may not be cached yet.' });
 
-    const torrent = await streamEngine.getTorrent(magnet);
+    const torrent = await streamEngine.getTorrent(magnet, { fileIndex: idx });
     const { stream, fileSize, fileName, start, end, mimeType } = streamEngine.getFileStream(torrent, idx, range);
 
     streamEngine.incrementStreams(infoHash);
@@ -196,6 +209,7 @@ function serveFromDisk(filePath, range, res) {
     const stream = fs.createReadStream(filePath, { start, end });
     stream.on('error', (err) => {
       if (!res.headersSent) res.status(500).json({ error: err.message });
+      stream.destroy();
     });
     stream.pipe(res);
   } catch (err) {
@@ -208,11 +222,26 @@ function serveFromDisk(filePath, range, res) {
 app.get('/api/torrent/:infoHash/files', async (req, res) => {
   try {
     const { infoHash } = req.params;
-    const cached = streamEngine.getCachedFileList(infoHash);
-    if (cached) {
-      return res.json({ files: cached, cached: true });
+
+    // First: check if we have in-memory file list from active torrent
+    const inMemory = streamEngine.getCachedFileList(infoHash);
+    if (inMemory) {
+      return res.json({ files: inMemory, cached: false });
     }
 
+    // Second: check if all files for this infoHash are already on disk (no torrent needed)
+    const diskFiles = cacheManager.getCacheFiles().filter(f => f.infoHash === infoHash);
+    if (diskFiles.length > 0) {
+      const files = diskFiles.map(f => ({
+        index: f.fileIndex ?? 0,
+        name: f.fileName,
+        size: f.size,
+        progress: f.verified ? 1 : 0,
+      }));
+      return res.json({ files, cached: true });
+    }
+
+    // Last resort: find the active magnet and load via torrent
     const magnet = findActiveMagnet(infoHash);
     if (!magnet) return res.json({ files: [], cached: false });
 
@@ -232,14 +261,23 @@ app.get('/api/torrent/:infoHash/files', async (req, res) => {
 
 app.post('/api/queue', async (req, res) => {
   try {
-    const { magnet, title, fileIndex, fileName } = req.body;
+    let { magnet, title, fileIndex, fileName, provider, torrentUrl } = req.body;
+
+    if (!magnet && provider && torrentUrl) {
+      magnet = await searchEngine.getMagnet(provider, torrentUrl);
+    }
     if (!magnet) return res.status(400).json({ error: 'Missing magnet' });
 
     const infoHash = streamEngine.extractInfoHash(magnet);
     if (!infoHash) return res.status(400).json({ error: 'Invalid magnet URI' });
 
     queueManager.addItem(infoHash, magnet, title || infoHash, fileIndex, fileName);
-    streamEngine.getTorrent(magnet, { fileIndex }).catch((e) => {
+
+    const enhancedMagnet = magnet.includes('&tr=') ? magnet : magnet + trackers.map(t => '&tr=' + encodeURIComponent(t)).join('');
+    const opts = fileIndex !== undefined && fileIndex !== null
+      ? { fileIndex }
+      : { selectAll: true };
+    streamEngine.getTorrent(enhancedMagnet, opts).catch((e) => {
       queueManager.markError(infoHash, e.message);
     });
 
@@ -259,6 +297,7 @@ app.delete('/api/queue/:infoHash', (req, res) => {
     const { infoHash } = req.params;
     queueManager.removeItem(infoHash);
     cacheManager.removeFromCache(infoHash);
+    streamEngine.destroyTorrent(infoHash);
     res.json({ removed: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -268,17 +307,24 @@ app.delete('/api/queue/:infoHash', (req, res) => {
 app.get('/api/download/:infoHash', (req, res) => {
   try {
     const { infoHash } = req.params;
-    const cached = cacheManager.getCached(infoHash);
+    // Support optional fileName query param to download a specific file from a multi-file torrent
+    const fileName = req.query.fileName || null;
+    const cached = cacheManager.getCached(infoHash, fileName);
     if (!cached) return res.status(404).json({ error: 'File not cached. Wait for download to complete.' });
 
     const filePath = cached.filePath;
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Cached file not found on disk.' });
 
     cacheManager.touchCache(infoHash);
-    const fileName = path.basename(filePath);
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
+    const dlFileName = path.basename(filePath);
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(dlFileName)}"`);
     res.setHeader('Content-Type', 'application/octet-stream');
-    fs.createReadStream(filePath).pipe(res);
+    const dlStream = fs.createReadStream(filePath);
+    dlStream.on('error', (err) => {
+      if (!res.headersSent) res.status(500).json({ error: err.message });
+      dlStream.destroy();
+    });
+    dlStream.pipe(res);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -308,9 +354,29 @@ app.delete('/api/cache', (req, res) => {
   res.json({ cleared: true, removed: files.length });
 });
 
+app.get('/api/cache/partials', (req, res) => {
+  try {
+    const info = streamEngine.getPartialsInfo();
+    res.json(info);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/cache/partials', (req, res) => {
+  try {
+    const result = streamEngine.cleanupPartials();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.delete('/api/cache/:infoHash', (req, res) => {
   try {
-    cacheManager.removeFromCache(req.params.infoHash);
+    const fileName = req.query.fileName || null;
+    cacheManager.removeFromCache(req.params.infoHash, fileName);
+    streamEngine.destroyTorrent(req.params.infoHash);
     res.json({ removed: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

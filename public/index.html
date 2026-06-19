@@ -28,7 +28,10 @@
       <input type="text" id="magnetInput" class="magnet-input" placeholder="Paste magnet link and press Enter...">
       <button id="magnetBtn" class="magnet-btn">Stream</button>
     </div>
-    <div id="cacheStatus" class="cache-status"></div>
+    <div id="cacheStatus" class="cache-status">
+      <span id="cacheLabel"></span>
+      <div class="cache-bar" id="cacheBar"><div class="cache-bar-fill" id="cacheBarFill"></div></div>
+    </div>
   </header>
 
   <main>
@@ -43,7 +46,16 @@
       </div>
       <div id="localCache" class="continue-watching hidden">
         <h2>Local Cache</h2>
-        <div id="localCacheList" class="continue-list"></div>
+        <div id="localCacheList" class="cache-files-list"></div>
+      </div>
+      <div id="partialsInfo" class="continue-watching hidden">
+        <h2>Partial Downloads <span id="partialsSize"></span></h2>
+        <div id="partialsList" class="cache-files-list"></div>
+        <button id="cleanPartialsBtn" class="action-btn primary" style="margin-top:8px;">Clean Orphaned Partials</button>
+      </div>
+      <div id="downloadsHome" class="continue-watching hidden">
+        <h2>Downloads</h2>
+        <div id="downloadsHomeList" class="downloads-list"></div>
       </div>
       <div id="recentSearches" class="recent-searches hidden">
         <h2>Recent Searches</h2>
@@ -72,6 +84,7 @@
 
     <div id="player" class="player hidden">
       <button class="back-btn" id="playerBack">&larr; Back</button>
+      <div id="playerTitle" class="player-title"></div>
       <div class="player-wrapper">
         <video id="videoPlayer" controls crossorigin playsinline></video>
       </div>
@@ -80,6 +93,12 @@
         <button id="copyLinkBtn" class="action-btn hidden">Copy Stream Link</button>
       </div>
       <div id="torrentStatus" class="torrent-status"></div>
+    </div>
+
+    <div id="magnetDetail" class="magnet-detail hidden">
+      <button class="back-btn" id="magnetBack">&larr; Back</button>
+      <h2 class="magnet-title">Torrent Files</h2>
+      <div id="magnetDetailContent"></div>
     </div>
 
     <div id="queuePage" class="queue-page hidden">

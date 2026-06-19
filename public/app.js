@@ -6,6 +6,7 @@
     currentSeason: 1,
     viewMode: 'grid',
     currentInfoHash: null,
+    currentFileName: null,
     _queueInterval: null,
   };
 
@@ -29,6 +30,7 @@
   const player = $('#player');
   const videoPlayer = $('#videoPlayer');
   const torrentStatus = $('#torrentStatus');
+  const playerTitle = $('#playerTitle');
   const cacheStatus = $('#cacheStatus');
   const footerCache = $('#footerCache');
   const homeSection = $('#home');
@@ -41,8 +43,17 @@
   const watchLaterHomeList = $('#watchLaterHomeList');
   const localCache = $('#localCache');
   const localCacheList = $('#localCacheList');
+  const downloadsHome = $('#downloadsHome');
+  const downloadsHomeList = $('#downloadsHomeList');
+  const cacheLabel = $('#cacheLabel');
+  const cacheBar = $('#cacheBar');
+  const cacheBarFill = $('#cacheBarFill');
   const queueNavBtn = $('#queueNavBtn');
   const queueCount = $('#queueCount');
+  const partialsInfo = $('#partialsInfo');
+  const partialsList = $('#partialsList');
+  const partialsSize = $('#partialsSize');
+  const cleanPartialsBtn = $('#cleanPartialsBtn');
   const queuePage = $('#queuePage');
   const queueList = $('#queueList');
   const queueBack = $('#queueBack');
@@ -53,6 +64,9 @@
   const magnetBtn = $('#magnetBtn');
   const magnetToggle = $('#magnetToggle');
   const magnetBar = $('#magnetBar');
+  const magnetDetail = $('#magnetDetail');
+  const magnetDetailContent = $('#magnetDetailContent');
+  const magnetBack = $('#magnetBack');
 
   const filesCache = new Map();
   let torrentCached = false;
@@ -68,12 +82,14 @@
     if (plyrInstance) { plyrInstance.destroy(); plyrInstance = null; }
     if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
     videoPlayer.src = '';
+    playerTitle.textContent = '';
     downloadBtn.classList.add('hidden');
     downloadBtn.textContent = 'Download';
     copyLinkBtn.classList.add('hidden');
     torrentCached = false;
     state.playerMovie = null;
     state.currentInfoHash = null;
+    state.currentFileName = null;
 
     if (state.selected) {
       showDetail(state.selected, true);
@@ -101,7 +117,9 @@
     const magnet = magnetInput.value.trim();
     if (!magnet) return;
     magnetInput.value = '';
-    startPlayback(magnet, null, null, 'Direct Stream', { infoHash: null, title: 'Direct Stream', poster: null });
+    magnetBar.classList.add('hidden');
+    magnetToggle.classList.remove('active');
+    showMagnetFiles(magnet);
   });
 
   magnetInput.addEventListener('keydown', (e) => {
@@ -110,6 +128,7 @@
 
   queueNavBtn.addEventListener('click', showQueuePage);
   queueBack.addEventListener('click', () => showSection('home'));
+  magnetBack.addEventListener('click', () => showSection('home'));
 
   function showQueuePage() {
     showSection('queue');
@@ -118,11 +137,13 @@
     state._queueInterval = setInterval(renderQueue, 5000);
   }
 
-  async function addToQueue(magnet, title, fileIndex, fileName) {
+  async function addToQueue(magnet, title, fileIndex, fileName, provider, torrentUrl) {
     try {
       const body = { magnet, title };
       if (fileIndex !== undefined) body.fileIndex = fileIndex;
       if (fileName) body.fileName = fileName;
+      if (provider) body.provider = provider;
+      if (torrentUrl) body.torrentUrl = torrentUrl;
       const resp = await fetch('/api/queue', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -227,7 +248,7 @@
     `).join('');
 
     panel.querySelectorAll('.torrent-file-play').forEach(fbtn => {
-      fbtn.addEventListener('click', () => {
+      fbtn.addEventListener('click', async () => {
         const ih = fbtn.dataset.infohash;
         const idx = parseInt(fbtn.dataset.index, 10);
         const name = fbtn.dataset.name;
@@ -240,6 +261,15 @@
           title: meta?.title || name,
           poster: meta?.poster || null,
         }, mg);
+        copyLinkBtn.classList.remove('hidden');
+        downloadBtn.classList.remove('hidden');
+        // Check if this specific file is already cached on the server
+        try {
+          const cr = await fetch('/api/cache');
+          const cd = await cr.json();
+          torrentCached = (cd.files || []).some(f => f.infoHash === ih && f.fileName === name && f.verified);
+        } catch { torrentCached = false; }
+        updateDownloadButton();
       });
     });
 
@@ -265,6 +295,10 @@
   function startStream(infoHash, file, continueInfo, magnet) {
     const streamUrl = `/stream/${infoHash}/file/${file.index}/${encodeURIComponent(file.name)}`;
 
+    state.currentInfoHash = infoHash;
+    state.currentFileName = file.name;
+    state.playerMovie = state.playerMovie || { infoHash, files: [{ index: file.index, name: file.name }] };
+
     if (plyrInstance) plyrInstance.destroy();
     plyrInstance = null;
     videoPlayer.src = '';
@@ -277,6 +311,9 @@
 
     plyrInstance.play();
     startTorrentPolling(infoHash);
+
+    const displayTitle = continueInfo?.title || file.name;
+    playerTitle.textContent = displayTitle;
 
     if (continueInfo) {
       continueInfo.infoHash = infoHash;
@@ -304,11 +341,11 @@
     torrentStatus.innerHTML = '<span>Resuming...</span>';
     copyLinkBtn.classList.remove('hidden');
     downloadBtn.classList.remove('hidden');
-    torrentCached = false;
-    updateDownloadButton();
     state.currentInfoHash = item.infoHash || null;
+    playerTitle.textContent = item.title || item.fileName || '';
 
     const resumePct = item.progress || 0;
+    let usedExisting = false;
 
     try {
       // Try direct stream first (torrent might be cached)
@@ -316,7 +353,8 @@
       if (item.infoHash && item.fileIndex !== undefined && item.fileName) {
         streamUrl = `/stream/${item.infoHash}/file/${item.fileIndex}/${encodeURIComponent(item.fileName)}`;
         const check = await fetch(streamUrl, { method: 'HEAD' });
-        if (!check.ok) streamUrl = null;
+        if (check.ok) { usedExisting = true; }
+        else streamUrl = null;
       }
 
       // If not cached, re-add torrent
@@ -337,7 +375,8 @@
         streamUrl = `/stream/${data.infoHash}/file/${fi}/${encodeURIComponent(fname)}`;
       }
 
-      if (plyrInstance) plyrInstance.destroy();
+      torrentCached = usedExisting;
+      updateDownloadButton();
       plyrInstance = null;
       videoPlayer.src = '';
       videoPlayer.src = streamUrl;
@@ -426,6 +465,7 @@
     player.classList.add('hidden');
     loading.classList.add('hidden');
     queuePage.classList.add('hidden');
+    magnetDetail.classList.add('hidden');
 
     if (section === 'home') homeSection.classList.remove('hidden');
     if (section === 'loading') loading.classList.remove('hidden');
@@ -433,7 +473,9 @@
     if (section === 'detail') detail.classList.remove('hidden');
     if (section === 'player') player.classList.remove('hidden');
     if (section === 'queue') queuePage.classList.remove('hidden');
-    else if (state._queueInterval) { clearInterval(state._queueInterval); state._queueInterval = null; }
+    if (section === 'magnet') magnetDetail.classList.remove('hidden');
+
+    if (section !== 'queue' && state._queueInterval) { clearInterval(state._queueInterval); state._queueInterval = null; }
   }
 
   function renderResults() {
@@ -474,6 +516,13 @@
         const badgesHTML = srcBadges.shown.map(s => `<span class="source-badge">${esc(s)}</span>`).join('') +
           (srcBadges.extra > 0 ? `<span class="source-badge extra">+${srcBadges.extra}</span>` : '');
 
+        const maxSeeds = torrents.reduce((max, t) => Math.max(max, t.seeds || 0), 0);
+        const maxPeers = torrents.reduce((max, t) => Math.max(max, t.leeches || 0), 0);
+        const seedClass = maxSeeds >= 100 ? 'seed-high' : maxSeeds >= 25 ? 'seed-mid' : 'seed-low';
+        const seedsHTML = maxSeeds > 0
+          ? `<span class="poster-seeds ${seedClass}">S:${maxSeeds} P:${maxPeers}</span>`
+          : '';
+
         const posterHTML = poster
           ? `<img class="poster-img" src="${poster}" alt="${esc(title)}" loading="lazy" onerror="this.parentElement.innerHTML='<div class=\\'poster-placeholder\\'>${esc(title)}</div>'">`
           : `<div class="poster-placeholder">${esc(title)}</div>`;
@@ -490,6 +539,7 @@
               ${rating ? `<span class="rating-badge">&#9733; ${rating}</span>` : ''}
             </div>
             <div class="poster-badges">${badgesHTML}</div>
+            ${seedsHTML}
           </div>
         </div>`;
       })
@@ -523,6 +573,13 @@
         const badgesHTML = srcBadges.shown.map(s => `<span class="source-badge">${esc(s)}</span>`).join('') +
           (srcBadges.extra > 0 ? `<span class="source-badge extra">+${srcBadges.extra}</span>` : '');
 
+        const maxSeeds = torrents.reduce((max, t) => Math.max(max, t.seeds || 0), 0);
+        const maxPeers = torrents.reduce((max, t) => Math.max(max, t.leeches || 0), 0);
+        const seedClass = maxSeeds >= 100 ? 'seed-high' : maxSeeds >= 25 ? 'seed-mid' : 'seed-low';
+        const seedsHTML = maxSeeds > 0
+          ? `<span class="list-seeds ${seedClass}">S:${maxSeeds} P:${maxPeers}</span>`
+          : '';
+
         const posterHTML = poster
           ? `<img class="list-poster" src="${poster}" alt="" loading="lazy" onerror="this.replaceWith(document.createElement('span'))">`
           : `<div class="list-poster-placeholder"></div>`;
@@ -536,6 +593,7 @@
               ${year ? `<span>${year}</span>` : ''}
               ${rating ? `<span class="rating-badge">&#9733; ${rating}</span>` : ''}
               <span>${countLabel}</span>
+              ${seedsHTML}
             </div>
             <div class="list-badges">${badgesHTML}</div>
           </div>
@@ -791,7 +849,52 @@
     const hasContinue = loadContinue().length > 0;
     const hasWatchLater = loadWatchLater().length > 0;
     const hasLocalCache = localCacheList.children.length > 0;
-    homePlaceholder.classList.toggle('hidden', hasRecents || hasContinue || hasWatchLater || hasLocalCache);
+    const hasDownloads = downloadsHomeList.children.length > 0;
+    homePlaceholder.classList.toggle('hidden', hasRecents || hasContinue || hasWatchLater || hasLocalCache || hasDownloads);
+  }
+
+  async function renderDownloadsHome() {
+    try {
+      const resp = await fetch('/api/queue');
+      const data = await resp.json();
+      const items = (data.items || []).filter(i => i.status === 'downloading');
+      downloadsHome.classList.toggle('hidden', items.length === 0);
+      renderHomeVisibility();
+
+      downloadsHomeList.innerHTML = items.length === 0
+        ? ''
+        : items.map(item => {
+          const pct = Math.min(100, Math.max(0, parseFloat(item.progress) || 0));
+          return `
+          <div class="download-item">
+            <span class="download-item-name">${esc(item.fileName || item.title)}</span>
+            <span class="download-item-pct">${pct.toFixed(1)}%</span>
+            <div class="download-bar"><div class="download-fill" style="width:${pct}%"></div></div>
+          </div>`;
+        }).join('');
+    } catch {}
+  }
+
+  async function renderPartials() {
+    try {
+      const resp = await fetch('/api/cache/partials');
+      const data = await resp.json();
+      const dirs = data.dirs || [];
+      const orphaned = dirs.filter(d => !d.active);
+      partialsInfo.classList.toggle('hidden', dirs.length === 0);
+      partialsSize.textContent = `(${formatFileSize(data.totalSize)})`;
+      renderHomeVisibility();
+
+      partialsList.innerHTML = dirs.map(d => `
+        <div class="cache-file-item">
+          <span class="cache-file-exists ${d.active ? 'exists-yes' : 'exists-no'}">${d.active ? '&#10003;' : '&#10005;'}</span>
+          <span class="cache-file-name">${esc(d.name)}</span>
+          <span class="cache-file-size">${formatFileSize(d.size)}</span>
+          <span class="cache-file-status">${d.active ? 'active' : 'orphaned'}</span>
+        </div>`).join('');
+
+      cleanPartialsBtn.classList.toggle('hidden', orphaned.length === 0);
+    } catch {}
   }
 
   async function renderLocalCache() {
@@ -802,34 +905,120 @@
       localCache.classList.toggle('hidden', files.length === 0);
       renderHomeVisibility();
 
-      localCacheList.innerHTML = files.map(f => `
-        <div class="continue-card" data-infohash="${esc(f.infoHash)}" data-filename="${esc(f.fileName)}">
-          <div class="continue-poster">
-            <div class="continue-placeholder">${esc(f.fileName)}</div>
-          </div>
-          <div class="continue-info">
-            <div class="continue-title">${esc(f.fileName)}</div>
-            <div class="continue-meta">${formatFileSize(f.size)} &bull; cached</div>
-          </div>
-        </div>`).join('');
+      localCacheList.innerHTML = files.map(f => {
+        const icon = f.verified ? '&#10003;' : f.sizeOnDisk > 0 ? '&#9888;' : '&#10007;';
+        const statusCls = f.verified ? 'exists-yes' : f.sizeOnDisk > 0 ? 'exists-partial' : 'exists-no';
+        const tip = f.verified
+          ? 'Verified — size matches'
+          : f.sizeOnDisk > 0
+            ? `Size mismatch: expected ${formatFileSize(f.size)}, disk has ${formatFileSize(f.sizeOnDisk)}`
+            : 'File missing from disk';
+        const playDisabled = !f.verified ? ' disabled' : '';
+        return `
+        <div class="cache-file-item" data-infohash="${esc(f.infoHash)}" data-filename="${esc(f.fileName)}" data-magnet="${esc(f.magnet || '')}" data-fileindex="${f.fileIndex !== null && f.fileIndex !== undefined ? f.fileIndex : ''}">
+          <span class="cache-file-exists ${statusCls}" title="${esc(tip)}">${icon}</span>
+          <span class="cache-file-name">${esc(f.fileName)}</span>
+          <span class="cache-file-size">${formatFileSize(f.size)}</span>
+          <button class="play-btn cache-play-btn"${playDisabled} title="${!f.verified ? 'File incomplete — retry first' : 'Play'}">Play</button>
+          <button class="action-btn secondary cache-dl-btn">Download</button>
+          ${!f.verified && f.sizeOnDisk > 0 ? `<button class="action-btn secondary cache-retry-btn" title="Retry this file">&#8635;</button>` : ''}
+          <button class="action-btn secondary cache-del-btn" title="Remove from cache">&#10005;</button>
+        </div>`;
+      }).join('');
 
-      localCacheList.querySelectorAll('.continue-card').forEach(card => {
-        card.addEventListener('click', () => {
-          const ih = card.dataset.infohash;
-          const fn = card.dataset.filename;
-          showSection('player');
-          startStream(ih, { index: 0, name: fn }, {
-            infoHash: null,
-            title: fn,
-            poster: null,
-          }, '');
-          copyLinkBtn.classList.remove('hidden');
-          downloadBtn.classList.remove('hidden');
-          torrentCached = true;
-          updateDownloadButton();
+      localCacheList.querySelectorAll('.cache-file-item').forEach(item => {
+        const ih = item.dataset.infohash;
+        const fn = item.dataset.filename;
+        const mg = item.dataset.magnet;
+        const fi = item.dataset.fileindex !== '' ? parseInt(item.dataset.fileindex) : 0;
+
+        const playBtn = item.querySelector('.cache-play-btn');
+        if (playBtn && !playBtn.disabled) {
+          playBtn.addEventListener('click', () => {
+            showSection('player');
+            startStream(ih, { index: fi, name: fn }, {
+              infoHash: null, title: fn, poster: null,
+            }, '');
+            copyLinkBtn.classList.remove('hidden');
+            downloadBtn.classList.remove('hidden');
+            torrentCached = true;
+            updateDownloadButton();
+          });
+        }
+
+        item.querySelector('.cache-dl-btn').addEventListener('click', () => {
+          const dlUrl = fn
+            ? `/api/download/${ih}?fileName=${encodeURIComponent(fn)}`
+            : `/api/download/${ih}`;
+          window.open(dlUrl, '_blank');
+          showToast('Download started');
+        });
+
+        const retryBtn = item.querySelector('.cache-retry-btn');
+        if (retryBtn) {
+          retryBtn.addEventListener('click', () => {
+            if (!mg) { showToast('No magnet available for retry'); return; }
+            addToQueue(mg, fn, fi, fn);
+            renderDownloadsHome();
+          });
+        }
+
+        item.querySelector('.cache-del-btn').addEventListener('click', async () => {
+          const url = `/api/cache/${ih}?fileName=${encodeURIComponent(fn)}`;
+          await fetch(url, { method: 'DELETE' });
+          showToast('Removed from cache');
+          renderLocalCache();
+          updateCacheStatus();
         });
       });
     } catch {}
+  }
+
+  async function showMagnetFiles(magnet) {
+    showSection('magnet');
+    magnetDetailContent.innerHTML = '<div class="torrent-files-loading">Fetching torrent info...</div>';
+
+    try {
+      const resp = await fetch('/api/play', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ magnet, preview: true }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error);
+
+      const files = (data.files || []).filter(f => f.name);
+      if (files.length === 0) {
+        magnetDetailContent.innerHTML = '<div class="torrent-files-empty">No files found in this torrent.</div>';
+        return;
+      }
+
+      const infoHash = data.infoHash;
+
+      let html = '';
+      if (files.length > 1) {
+        html += `<div class="magnet-download-all">
+          <button class="action-btn" id="downloadAllBtn">Download All to Server</button>
+        </div>`;
+      }
+
+      html += `<div class="torrent-files-panel" id="magnetFileList"></div>`;
+      magnetDetailContent.innerHTML = html;
+
+      const panel = $('#magnetFileList');
+      renderFilePanel(panel, files, infoHash, magnet, null);
+
+      if (files.length > 1) {
+        $('#downloadAllBtn').addEventListener('click', () => {
+          addToQueue(magnet, 'Full torrent', undefined, 'Full torrent');
+          showToast('Full torrent queued for download');
+        });
+      }
+    } catch (e) {
+      magnetDetailContent.innerHTML = `<div class="torrent-files-empty" style="color:#f88">${esc(e.message)}</div>`;
+      magnetBar.classList.remove('hidden');
+      magnetToggle.classList.add('active');
+      magnetInput.focus();
+    }
   }
 
   function showDetail(movie, keepSeason) {
@@ -895,7 +1084,8 @@
                   data-magnet="${esc(t.magnet||'')}" data-url="${esc(t.torrentUrl||'')}"
                   data-provider="${esc(t.provider)}" data-title="${esc(t.title||'')}">&#128193; Files</button>` : ''}
                 <button class="action-btn secondary queue-add-btn"
-                  data-magnet="${esc(t.magnet||'')}" data-title="${esc(t.title||'')}">&#128229;</button>
+                  data-magnet="${esc(t.magnet||'')}" data-url="${esc(t.torrentUrl||'')}"
+                  data-provider="${esc(t.provider)}" data-title="${esc(t.title||'')}">&#128229;</button>
                 ${isPack ? '<div class="torrent-files-panel hidden"></div>' : ''}
               </div>`).join('')}
             </div>
@@ -930,7 +1120,8 @@
                 data-magnet="${esc(t.magnet||'')}" data-url="${esc(t.torrentUrl||'')}"
                 data-provider="${esc(t.provider)}" data-title="${esc(t.title||'')}"><span class="files-arrow">&#9654;</span> Files</button>
               <button class="action-btn secondary queue-add-btn"
-                data-magnet="${esc(t.magnet||'')}" data-title="${esc(t.title||'')}">&#128229;</button>
+                data-magnet="${esc(t.magnet||'')}" data-url="${esc(t.torrentUrl||'')}"
+                data-provider="${esc(t.provider)}" data-title="${esc(t.title||'')}">&#128229;</button>
             </div>
             <div class="torrent-files-panel hidden"></div>
           </div>`;
@@ -1077,9 +1268,12 @@
         e.stopPropagation();
         const magnet = btn.dataset.magnet;
         const title = btn.dataset.title;
+        const url = btn.dataset.url;
+        const provider = btn.dataset.provider;
         const fi = parseInt(btn.dataset.fileindex);
-        if (magnet) addToQueue(magnet, title, isNaN(fi) ? undefined : fi, title);
-        else showToast('No magnet link available');
+        if (magnet || (url && provider)) {
+          addToQueue(magnet, title, isNaN(fi) ? undefined : fi, title, provider, url);
+        } else showToast('No magnet link available');
       });
     });
   }
@@ -1121,25 +1315,17 @@
         return;
       }
 
-      startStream(data.infoHash, files[0], continueInfo, playBody.magnet);
+      const firstFile = files[0];
+      startStream(data.infoHash, firstFile, continueInfo, playBody.magnet);
       copyLinkBtn.classList.remove('hidden');
-      torrentCached = !!data.cached;
+      // Check if this specific file is cached (not just the torrent generally)
+      try {
+        const cr = await fetch('/api/cache');
+        const cd = await cr.json();
+        torrentCached = (cd.files || []).some(f => f.infoHash === data.infoHash && f.fileName === firstFile.name && f.verified);
+      } catch { torrentCached = !!data.cached; }
       downloadBtn.classList.remove('hidden');
       updateDownloadButton();
-
-      const checkCache = setInterval(async () => {
-        try {
-          const cr = await fetch('/api/cache');
-          const cd = await cr.json();
-          const cached = cd.files?.some(f => f.infoHash === data.infoHash);
-          if (cached && !torrentCached) {
-            torrentCached = true;
-            updateDownloadButton();
-            clearInterval(checkCache);
-          }
-        } catch {}
-      }, 5000);
-      videoPlayer.addEventListener('ended', () => clearInterval(checkCache));
     } catch (e) {
       torrentStatus.innerHTML = `<span style="color: #f88;">${esc(e.message)}</span>`;
     }
@@ -1162,7 +1348,10 @@
       showToast('File is still caching. Wait for download to complete.');
       return;
     }
-    window.open(`/api/download/${state.currentInfoHash}`, '_blank');
+    const dlUrl = state.currentFileName
+      ? `/api/download/${state.currentInfoHash}?fileName=${encodeURIComponent(state.currentFileName)}`
+      : `/api/download/${state.currentInfoHash}`;
+    window.open(dlUrl, '_blank');
     showToast('Download started');
   });
 
@@ -1186,19 +1375,46 @@
 
   let pollInterval = null;
   function startTorrentPolling(infoHash) {
+    // If the file is already confirmed cached on disk, no need to poll — it's being served from disk
+    if (torrentCached) {
+      if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+      torrentStatus.innerHTML = '<span style="color: var(--accent)">\u2713 Playing from server cache</span>';
+      return;
+    }
+
     if (pollInterval) clearInterval(pollInterval);
     const updateStatus = async () => {
       try {
         const resp = await fetch(`/api/torrent/${infoHash}/files`);
         const data = await resp.json();
+
+        // If the server now reports these are cached disk files, stop polling
+        if (data.cached) {
+          torrentCached = true;
+          updateDownloadButton();
+          torrentStatus.innerHTML = '<span style="color: var(--accent)">\u2713 Playing from server cache</span>';
+          if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+          return;
+        }
+
         if (data.files && data.files.length > 0) {
           const total = data.files.reduce((s, f) => s + f.size, 0);
           const downloaded = data.files.reduce((s, f) => s + f.size * (f.progress || 0), 0);
           const pct = total > 0 ? ((downloaded / total) * 100).toFixed(1) : 0;
-          torrentStatus.innerHTML = `<span>Progress: ${pct}%</span><span>Files: ${data.files.length}</span><span style="color:var(--text-muted)">Streaming...</span>`;
+          torrentStatus.innerHTML = `<span>Progress: ${pct}%</span><span>Files: ${data.files.length}</span><span style="color:var(--text-muted)">Streaming from torrent...</span>`;
 
           if (!torrentCached) {
             downloadBtn.textContent = pct >= 99.9 ? 'Caching...' : `Caching ${pct}%`;
+          }
+        }
+
+        if (!torrentCached && infoHash) {
+          const cr = await fetch('/api/cache');
+          const cd = await cr.json();
+          if (cd.files?.some(f => f.infoHash === infoHash && f.fileName === state.currentFileName && f.verified)) {
+            torrentCached = true;
+            updateDownloadButton();
+            torrentStatus.innerHTML = '<span style="color: var(--accent)">\u2713 Cached to server — playing from disk</span>';
           }
         }
       } catch {}
@@ -1212,6 +1428,7 @@
     if (plyrInstance) { plyrInstance.destroy(); plyrInstance = null; }
     if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
     videoPlayer.src = '';
+    playerTitle.textContent = '';
     downloadBtn.classList.add('hidden');
     downloadBtn.textContent = 'Download';
     torrentCached = false;
@@ -1219,6 +1436,7 @@
     state.selected = null;
     state.playerMovie = null;
     state.currentInfoHash = null;
+    state.currentFileName = null;
 
     if (state.movies.length > 0) {
       showSection('gallery');
@@ -1232,15 +1450,14 @@
     try {
       const resp = await fetch('/api/cache');
       const data = await resp.json();
-      const text = `Cache: ${data.sizeFormatted} / ${data.maxSizeFormatted} (${data.fileCount} files)`;
-      cacheStatus.textContent = text;
-      footerCache.textContent = text + ' — Torento v1.0';
-    } catch { cacheStatus.textContent = ''; }
-  }
-
-  function renderHomeVisibility() {
-    const h = loadRecent().length > 0 || loadContinue().length > 0 || loadWatchLater().length > 0;
-    homePlaceholder.classList.toggle('hidden', h);
+      const pct = parseFloat(data.usagePercent) || 0;
+      const text = `${data.sizeFormatted} / ${data.maxSizeFormatted} (${data.fileCount} files)`;
+      cacheLabel.textContent = text;
+      cacheBarFill.style.width = pct + '%';
+      cacheBar.classList.toggle('cache-full', pct >= 90);
+      cacheBar.classList.toggle('cache-warn', pct >= 75 && pct < 90);
+      footerCache.textContent = text + ` (${pct}%) — Torento v1.0`;
+    } catch { cacheLabel.textContent = ''; }
   }
 
   updateCacheStatus();
@@ -1249,7 +1466,25 @@
   renderContinue();
   renderWatchLater();
   renderLocalCache();
+  renderPartials();
+  renderDownloadsHome();
+  setInterval(renderDownloadsHome, 10000);
   updateQueueCount();
   renderHomeVisibility();
+
+  cleanPartialsBtn.addEventListener('click', async () => {
+    cleanPartialsBtn.disabled = true;
+    cleanPartialsBtn.textContent = 'Cleaning...';
+    try {
+      const resp = await fetch('/api/cache/partials', { method: 'DELETE' });
+      const result = await resp.json();
+      showToast(`Cleaned ${result.removed} orphaned part(s) (${formatFileSize(result.sizeFreed)})`);
+      renderPartials();
+      updateCacheStatus();
+    } catch { showToast('Failed to clean partials'); }
+    cleanPartialsBtn.disabled = false;
+    cleanPartialsBtn.textContent = 'Clean Orphaned Partials';
+  });
+
   showSection('home');
 })();
