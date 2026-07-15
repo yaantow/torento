@@ -294,6 +294,25 @@
     return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
   }
 
+  // The <video> element persists across plays (only the Plyr wrapper gets
+  // recreated), so these are wired once. Without them a failed/slow-to-start
+  // stream shows nothing at all — no error, no "it's working, just slow".
+  let pendingPrepareNotice = null;
+  videoPlayer.addEventListener('error', () => {
+    const err = videoPlayer.error;
+    const msg = err ? `Playback error (code ${err.code})` : 'Playback error';
+    torrentStatus.innerHTML = `<span style="color: #f88;">${esc(msg)}</span>`;
+    showToast(msg);
+    fetch('/api/client-error', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg, code: err?.code, src: videoPlayer.currentSrc }),
+    }).catch(() => {});
+  });
+  videoPlayer.addEventListener('playing', () => {
+    if (pendingPrepareNotice) { clearTimeout(pendingPrepareNotice); pendingPrepareNotice = null; }
+    torrentStatus.innerHTML = '<span style="color: var(--accent)">Playing</span>';
+  });
+
   function startStream(infoHash, file, continueInfo, magnet) {
     const streamUrl = `/stream/${infoHash}/file/${file.index}/${encodeURIComponent(file.name)}`;
 
@@ -311,7 +330,13 @@
       speed: { selected: 1, options: [0.5,0.75,1,1.25,1.5,2] },
     });
 
-    plyrInstance.play();
+    torrentStatus.innerHTML = '<span>Loading…</span>';
+    if (pendingPrepareNotice) clearTimeout(pendingPrepareNotice);
+    pendingPrepareNotice = setTimeout(() => {
+      torrentStatus.innerHTML = '<span>Preparing stream for playback — first play of a file can take up to a minute, thanks for your patience…</span>';
+    }, 3000);
+
+    plyrInstance.play().catch((e) => { torrentStatus.innerHTML = `<span style="color: #f88;">${esc(e.message)}</span>`; });
     startTorrentPolling(infoHash);
 
     const displayTitle = continueInfo?.title || file.name;
@@ -350,16 +375,17 @@
     let usedExisting = false;
 
     try {
-      // Try direct stream first (torrent might be cached)
+      // Stream directly if we have enough info — /stream resolves Drive/disk/
+      // torrent transparently. (A HEAD pre-check used to run here to decide
+      // this, but HEAD runs the full route handler same as GET, so for a
+      // file needing transcode it paid the full render wait *twice*.)
       let streamUrl = null;
       if (item.infoHash && item.fileIndex !== undefined && item.fileName) {
         streamUrl = `/stream/${item.infoHash}/file/${item.fileIndex}/${encodeURIComponent(item.fileName)}`;
-        const check = await fetch(streamUrl, { method: 'HEAD' });
-        if (check.ok) { usedExisting = true; }
-        else streamUrl = null;
+        usedExisting = true;
       }
 
-      // If not cached, re-add torrent
+      // If not enough info to stream directly, re-add torrent
       if (!streamUrl) {
         if (!item.magnet) throw new Error('No magnet saved for this item');
         torrentStatus.innerHTML = '<span>Re-adding torrent...</span>';
@@ -395,7 +421,13 @@
         }
       });
 
-      plyrInstance.play();
+      torrentStatus.innerHTML = '<span>Loading…</span>';
+      if (pendingPrepareNotice) clearTimeout(pendingPrepareNotice);
+      pendingPrepareNotice = setTimeout(() => {
+        torrentStatus.innerHTML = '<span>Preparing stream for playback — first play of a file can take up to a minute, thanks for your patience…</span>';
+      }, 3000);
+
+      plyrInstance.play().catch((e) => { torrentStatus.innerHTML = `<span style="color: #f88;">${esc(e.message)}</span>`; });
       startTorrentPolling(item.infoHash || state.currentInfoHash);
 
       let lastSave = 0;
@@ -1393,7 +1425,6 @@
     // If the file is already confirmed cached on disk, no need to poll — it's being served from disk
     if (torrentCached) {
       if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
-      torrentStatus.innerHTML = '<span style="color: var(--accent)">\u2713 Playing from server cache</span>';
       return;
     }
 

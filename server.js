@@ -1,11 +1,13 @@
 const express = require('express');
 const cookieParser = require('cookie-parser');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
 const cacheManager = require('./lib/cache/manager');
 const queueManager = require('./lib/cache/queue');
 const streamEngine = require('./lib/stream/engine');
+const transcode = require('./lib/stream/transcode');
 const searchEngine = require('./lib/search');
 const trackers = require('./lib/search/trackers');
 const VIDEO_EXTS = require('./lib/videoExts');
@@ -54,6 +56,13 @@ app.get('/api/auth/config', (req, res) => {
 
 app.get('/api/me', (req, res) => {
   res.json({ user: users.publicView(req.user) });
+});
+
+// Client-side <video> playback errors were previously invisible server-side.
+app.post('/api/client-error', session.requireAuth, (req, res) => {
+  const { message, code, src } = req.body || {};
+  console.log(`[client-error] ${req.user?.email || 'unknown'}: ${message} (code=${code}) src=${src}`);
+  res.json({ ok: true });
 });
 
 app.get('/api/auth/login', (req, res) => {
@@ -249,6 +258,139 @@ app.post('/api/play', session.requireAuth, async (req, res) => {
    STREAMING  (Drive -> local -> torrent, in that order)
    ============================================================ */
 
+// Transcoding needs ffmpeg/ffprobe to read the source reliably. Routing that
+// through an HTTP range proxy in front of Drive turned out to be fragile —
+// ffmpeg's http protocol didn't reliably keep requesting beyond the first
+// buffered window. Downloading straight to local disk first sidesteps all of
+// that: it's the exact same plain `drive.getRangeStream(..., null)` full
+// download already proven by the working "download" feature, and ffmpeg then
+// only ever touches a local file, same as local-cache playback already does.
+const TRANSCODE_SRC_DIR = path.join(config.cacheDir, '.transcode-src');
+try { fs.rmSync(TRANSCODE_SRC_DIR, { recursive: true, force: true }); } catch {}
+fs.mkdirSync(TRANSCODE_SRC_DIR, { recursive: true });
+
+async function downloadToTemp(userId, fileId, destPath) {
+  const upstream = await drive.getRangeStream(userId, fileId, null);
+  await new Promise((resolve, reject) => {
+    const ws = fs.createWriteStream(destPath);
+    upstream.stream.on('error', reject);
+    ws.on('error', reject);
+    ws.on('finish', resolve);
+    upstream.stream.pipe(ws);
+  });
+}
+
+// Probing only needs to see codec info near the start of the file, so a
+// small prefix is enough — full duration accuracy isn't needed since the
+// rendered output is a real, fully-seekable file once it exists.
+async function probeSource(source, filename) {
+  if (source.kind === 'disk') return transcode.probe(source.filePath);
+  const prefixPath = path.join(TRANSCODE_SRC_DIR, `probe-${crypto.randomBytes(8).toString('hex')}${path.extname(filename)}`);
+  try {
+    const upstream = await drive.getRangeStream(source.userId, source.fileId, 'bytes=0-5242879');
+    await new Promise((resolve, reject) => {
+      const ws = fs.createWriteStream(prefixPath);
+      upstream.stream.on('error', reject);
+      ws.on('error', reject);
+      ws.on('finish', resolve);
+      upstream.stream.pipe(ws);
+    });
+    return await transcode.probe(prefixPath);
+  } finally {
+    try { fs.unlinkSync(prefixPath); } catch {}
+  }
+}
+
+// Codec/container plan per (infoHash, filename) — probing is a network
+// round trip, so we only do it once per file and reuse the answer.
+const transcodePlanCache = new Map();
+
+function planFor(source, infoHash, filename) {
+  const key = `${infoHash}:${filename}`;
+  let entry = transcodePlanCache.get(key);
+  if (!entry) {
+    const ext = path.extname(filename).toLowerCase();
+    entry = probeSource(source, filename)
+      .then((probeResult) => transcode.planFor(probeResult, ext))
+      .catch((e) => {
+        console.log(`[transcode] probe failed for "${filename}", falling back to passthrough:`, e.message);
+        return { mode: 'passthrough' };
+      });
+    transcodePlanCache.set(key, entry);
+    entry.then((resolved) => transcodePlanCache.set(key, Promise.resolve(resolved)));
+  }
+  return Promise.resolve(entry);
+}
+
+// Rendered files are real, complete, faststart MP4s — cached on disk keyed
+// by (infoHash, filename) so repeat plays/seeks of the same episode don't
+// re-render. Bounded and swept periodically since this box is disk-tight.
+const TRANSCODE_DIR = path.join(config.cacheDir, '.transcoded');
+try { fs.rmSync(TRANSCODE_DIR, { recursive: true, force: true }); } catch {}
+fs.mkdirSync(TRANSCODE_DIR, { recursive: true });
+const renderedFiles = new Map(); // key -> { promise, path, lastAccessed }
+const MAX_RENDERED = 3;
+
+function renderKey(infoHash, filename) {
+  return crypto.createHash('sha1').update(`${infoHash}:${filename}`).digest('hex');
+}
+
+async function getOrRenderTranscoded(source, plan, infoHash, filename) {
+  const key = renderKey(infoHash, filename);
+  let entry = renderedFiles.get(key);
+  if (entry) {
+    entry.lastAccessed = Date.now();
+    return entry.promise;
+  }
+
+  evictOldRenders();
+  const outputPath = path.join(TRANSCODE_DIR, `${key}.mp4`);
+  const startedAt = Date.now();
+  const promise = (async () => {
+    let inputPath = source.filePath;
+    let srcTempPath = null;
+    if (source.kind === 'drive') {
+      srcTempPath = path.join(TRANSCODE_SRC_DIR, `${key}${path.extname(filename)}`);
+      console.log(`[transcode] downloading "${filename}" for rendering...`);
+      await downloadToTemp(source.userId, source.fileId, srcTempPath);
+      inputPath = srcTempPath;
+    }
+    try {
+      console.log(`[transcode] rendering "${filename}" (${plan.mode})...`);
+      await transcode.renderToFile({ inputUrl: inputPath, outputPath, plan });
+      console.log(`[transcode] rendered "${filename}" in ${Date.now() - startedAt}ms`);
+      return outputPath;
+    } finally {
+      if (srcTempPath) { try { fs.unlinkSync(srcTempPath); } catch {} }
+    }
+  })().catch((err) => {
+    renderedFiles.delete(key);
+    console.log(`[transcode] render failed for "${filename}":`, err.message);
+    throw err;
+  });
+  entry = { promise, path: outputPath, lastAccessed: Date.now() };
+  renderedFiles.set(key, entry);
+  return promise;
+}
+
+function evictOldRenders() {
+  if (renderedFiles.size < MAX_RENDERED) return;
+  const entries = [...renderedFiles.entries()].sort((a, b) => a[1].lastAccessed - b[1].lastAccessed);
+  const [oldestKey, oldest] = entries[0];
+  renderedFiles.delete(oldestKey);
+  oldest.promise.then((p) => { try { fs.unlinkSync(p); } catch {} }).catch(() => {});
+}
+
+setInterval(() => {
+  const cutoff = Date.now() - 2 * 60 * 60 * 1000;
+  for (const [key, entry] of renderedFiles) {
+    if (entry.lastAccessed < cutoff) {
+      renderedFiles.delete(key);
+      entry.promise.then((p) => { try { fs.unlinkSync(p); } catch {} }).catch(() => {});
+    }
+  }
+}, 15 * 60 * 1000);
+
 app.get('/stream/:infoHash/file/:fileIndex/:filename', session.requireAuth, async (req, res) => {
   try {
     const { infoHash, fileIndex, filename } = req.params;
@@ -257,16 +399,24 @@ app.get('/stream/:infoHash/file/:fileIndex/:filename', session.requireAuth, asyn
 
     // 1) Offloaded to the space's Drive? (served via the owner's connection)
     const driveFileId = queueManager.getDriveFileId(req.space.id, infoHash, filename);
-    if (driveFileId) {
-      console.log(`[stream] DRIVE: ${filename} (${infoHash.slice(0, 8)})`);
-      return streamFromDrive(req.space.ownerUserId, driveFileId, range, res);
-    }
-
     // 2) Still in local staging?
-    const cached = cacheManager.getCached(infoHash, filename);
-    if (cached) {
-      console.log(`[stream] DISK: ${filename} (${infoHash.slice(0, 8)})`);
-      cacheManager.touchCache(infoHash);
+    const cached = !driveFileId ? cacheManager.getCached(infoHash, filename) : null;
+
+    if (driveFileId || cached) {
+      const queueItem = driveFileId ? queueManager.getItem(req.space.id, infoHash, filename) : null;
+      const source = driveFileId
+        ? { kind: 'drive', userId: req.space.ownerUserId, fileId: driveFileId, totalSize: queueItem?.size || null }
+        : { kind: 'disk', filePath: cached.filePath };
+      if (cached) cacheManager.touchCache(infoHash);
+      console.log(`[stream] ${driveFileId ? 'DRIVE' : 'DISK'}: ${filename} (${infoHash.slice(0, 8)})`);
+
+      const plan = await planFor(source, infoHash, filename);
+      if (plan.mode && plan.mode !== 'passthrough') {
+        const renderedPath = await getOrRenderTranscoded(source, plan, infoHash, filename);
+        return serveFromDisk(renderedPath, range, res);
+      }
+
+      if (driveFileId) return streamFromDrive(req.space.ownerUserId, driveFileId, queueItem?.size || null, range, res);
       return serveFromDisk(cached.filePath, range, res);
     }
 
@@ -296,15 +446,30 @@ app.get('/stream/:infoHash/file/:fileIndex/:filename', session.requireAuth, asyn
   }
 });
 
-async function streamFromDrive(userId, fileId, range, res) {
+async function streamFromDrive(userId, fileId, knownSize, range, res) {
+  const startedAt = Date.now();
   try {
-    const upstream = await drive.getRangeStream(userId, fileId, range);
-    const h = upstream.headers || {};
-    const headers = { 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-cache' };
-    if (h['content-type']) headers['Content-Type'] = h['content-type'];
-    if (h['content-length']) headers['Content-Length'] = h['content-length'];
-    if (h['content-range']) headers['Content-Range'] = h['content-range'];
-    res.writeHead(upstream.status === 206 ? 206 : (range ? 206 : 200), headers);
+    // googleapis doesn't surface response headers for streamed media (they
+    // come back {}), so Content-Range/Content-Length can't be read off the
+    // upstream response — build them ourselves from the range we asked for
+    // and the file's known size (from the queue record, or a metadata call).
+    const totalSize = knownSize || await drive.getFileSize(userId, fileId);
+    let start = 0, end = totalSize - 1;
+    const m = range && /bytes=(\d+)-(\d*)/.exec(range);
+    if (m) {
+      start = parseInt(m[1], 10);
+      if (m[2]) end = Math.min(parseInt(m[2], 10), totalSize - 1);
+    }
+
+    const upstream = await drive.getRangeStream(userId, fileId, `bytes=${start}-${end}`);
+    console.log(`[drive] first byte in ${Date.now() - startedAt}ms (${fileId.slice(0, 8)})`);
+    const headers = {
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-cache',
+      'Content-Length': end - start + 1,
+    };
+    if (range) headers['Content-Range'] = `bytes ${start}-${end}/${totalSize}`;
+    res.writeHead(range ? 206 : 200, headers);
     upstream.stream.on('error', () => { if (!res.headersSent) res.status(502).end(); res.destroy(); });
     res.on('close', () => upstream.stream.destroy());
     upstream.stream.pipe(res);
