@@ -1,4 +1,6 @@
 node_modules/
 /cache/
+/data/
 *.db
 .env
+nohup.out

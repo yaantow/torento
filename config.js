@@ -2,12 +2,38 @@ require('dotenv').config();
 const path = require('path');
 const os = require('os');
 
+const APP_URL = (process.env.APP_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, '');
+
 const config = {
   port: parseInt(process.env.PORT, 10) || 3000,
+  appUrl: APP_URL,
+  isProd: process.env.NODE_ENV === 'production',
+  dataDir: path.resolve(process.env.DATA_DIR || './data'),
   cacheDir: path.resolve(process.env.CACHE_DIR || './cache'),
   cacheMaxGB: parseInt(process.env.CACHE_MAX_GB, 10) || 28,
   cacheTTLHours: parseInt(process.env.CACHE_TTL_HOURS, 10) || 0,
   maxConcurrentTorrents: parseInt(process.env.MAX_CONCURRENT_TORRENTS, 10) || 2,
+
+  auth: {
+    clientId: process.env.GOOGLE_OAUTH_CLIENT_ID || '',
+    clientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET || '',
+    redirectUri: process.env.OAUTH_REDIRECT_URI || `${APP_URL}/api/auth/callback`,
+    sessionSecret: process.env.SESSION_SECRET || '',
+    tokenEncryptionKey: process.env.TOKEN_ENCRYPTION_KEY || '',
+    allowedEmails: (process.env.ALLOWED_EMAILS || '')
+      .split(',').map(e => e.trim().toLowerCase()).filter(Boolean),
+    scopes: [
+      'openid',
+      'email',
+      'profile',
+      'https://www.googleapis.com/auth/drive.file',
+    ],
+  },
+
+  drive: {
+    pickerApiKey: process.env.GOOGLE_PICKER_API_KEY || '',
+    defaultFolder: process.env.DRIVE_DEFAULT_FOLDER || 'Torento',
+  },
 
   sources: {
     x1337: {

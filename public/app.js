@@ -229,6 +229,8 @@
     toast.classList.remove('hidden');
     setTimeout(() => toast.classList.add('hidden'), 2000);
   }
+  // Let the auth controller surface toasts through the same UI.
+  window.__torentoToast = showToast;
 
   function renderFilePanel(panel, files, infoHash, magnet, meta) {
     panel.innerHTML = files.map(f => `
@@ -906,23 +908,33 @@
       renderHomeVisibility();
 
       localCacheList.innerHTML = files.map(f => {
-        const icon = f.verified ? '&#10003;' : f.sizeOnDisk > 0 ? '&#9888;' : '&#10007;';
-        const statusCls = f.verified ? 'exists-yes' : f.sizeOnDisk > 0 ? 'exists-partial' : 'exists-no';
-        const tip = f.verified
-          ? 'Verified — size matches'
-          : f.sizeOnDisk > 0
-            ? `Size mismatch: expected ${formatFileSize(f.size)}, disk has ${formatFileSize(f.sizeOnDisk)}`
-            : 'File missing from disk';
-        const playDisabled = !f.verified ? ' disabled' : '';
+        const st = f.status || (f.verified ? 'stored' : 'downloading');
+        const pct = Math.round(f.progress || 0);
+        let icon, statusCls, tip, sizeLabel;
+        if (st === 'stored') {
+          icon = '&#10003;'; statusCls = 'exists-yes'; tip = 'Saved in Google Drive';
+          sizeLabel = formatFileSize(f.size);
+        } else if (st === 'uploading') {
+          icon = '&#8593;'; statusCls = 'exists-partial'; tip = 'Uploading to Google Drive…';
+          sizeLabel = 'Uploading…';
+        } else if (st === 'error') {
+          icon = '&#10007;'; statusCls = 'exists-no'; tip = f.error || 'Something went wrong';
+          sizeLabel = 'Error';
+        } else {
+          icon = '&#8595;'; statusCls = 'exists-partial'; tip = `Downloading… ${pct}%`;
+          sizeLabel = `${pct}%`;
+        }
+        const isStored = st === 'stored';
+        const playDisabled = isStored ? '' : ' disabled';
         return `
         <div class="cache-file-item" data-infohash="${esc(f.infoHash)}" data-filename="${esc(f.fileName)}" data-magnet="${esc(f.magnet || '')}" data-fileindex="${f.fileIndex !== null && f.fileIndex !== undefined ? f.fileIndex : ''}">
           <span class="cache-file-exists ${statusCls}" title="${esc(tip)}">${icon}</span>
           <span class="cache-file-name">${esc(f.fileName)}</span>
-          <span class="cache-file-size">${formatFileSize(f.size)}</span>
-          <button class="play-btn cache-play-btn"${playDisabled} title="${!f.verified ? 'File incomplete — retry first' : 'Play'}">Play</button>
-          <button class="action-btn secondary cache-dl-btn">Download</button>
-          ${!f.verified && f.sizeOnDisk > 0 ? `<button class="action-btn secondary cache-retry-btn" title="Retry this file">&#8635;</button>` : ''}
-          <button class="action-btn secondary cache-del-btn" title="Remove from cache">&#10005;</button>
+          <span class="cache-file-size">${sizeLabel}</span>
+          <button class="play-btn cache-play-btn"${playDisabled} title="${isStored ? 'Play from Drive' : 'Available once saved to Drive'}">Play</button>
+          ${isStored ? `<button class="action-btn secondary cache-dl-btn">Download</button>` : ''}
+          ${st === 'error' ? `<button class="action-btn secondary cache-retry-btn" title="Retry this file">&#8635;</button>` : ''}
+          <button class="action-btn secondary cache-del-btn" title="Remove from library">&#10005;</button>
         </div>`;
       }).join('');
 
@@ -946,13 +958,16 @@
           });
         }
 
-        item.querySelector('.cache-dl-btn').addEventListener('click', () => {
-          const dlUrl = fn
-            ? `/api/download/${ih}?fileName=${encodeURIComponent(fn)}`
-            : `/api/download/${ih}`;
-          window.open(dlUrl, '_blank');
-          showToast('Download started');
-        });
+        const dlBtn = item.querySelector('.cache-dl-btn');
+        if (dlBtn) {
+          dlBtn.addEventListener('click', () => {
+            const dlUrl = fn
+              ? `/api/download/${ih}?fileName=${encodeURIComponent(fn)}`
+              : `/api/download/${ih}`;
+            window.open(dlUrl, '_blank');
+            showToast('Download started');
+          });
+        }
 
         const retryBtn = item.querySelector('.cache-retry-btn');
         if (retryBtn) {
@@ -1448,15 +1463,31 @@
 
   async function updateCacheStatus() {
     try {
-      const resp = await fetch('/api/cache');
-      const data = await resp.json();
-      const pct = parseFloat(data.usagePercent) || 0;
-      const text = `${data.sizeFormatted} / ${data.maxSizeFormatted} (${data.fileCount} files)`;
+      const [lib, drv] = await Promise.all([
+        fetch('/api/cache').then(r => r.ok ? r.json() : null),
+        fetch('/api/drive/status').then(r => r.ok ? r.json() : null),
+      ]);
+      if (!lib) { cacheLabel.textContent = ''; return; }
+
+      const inLibrary = lib.fileCount || 0;
+      let pct = 0;
+      let driveText = '';
+      const q = drv && drv.storage && drv.storage.quota;
+      if (q && q.limit) {
+        pct = Math.min(100, (Number(q.usage) / Number(q.limit)) * 100);
+        driveText = `Drive ${formatFileSize(q.usage)} / ${formatFileSize(q.limit)}`;
+      } else if (drv && drv.connected) {
+        driveText = 'Drive connected';
+      } else {
+        driveText = 'Drive not connected';
+      }
+
+      const text = `${inLibrary} in library · ${driveText}`;
       cacheLabel.textContent = text;
-      cacheBarFill.style.width = pct + '%';
+      cacheBarFill.style.width = pct.toFixed(1) + '%';
       cacheBar.classList.toggle('cache-full', pct >= 90);
       cacheBar.classList.toggle('cache-warn', pct >= 75 && pct < 90);
-      footerCache.textContent = text + ` (${pct}%) — Torento v1.0`;
+      footerCache.textContent = text + ' — Torento v1.0';
     } catch { cacheLabel.textContent = ''; }
   }
 

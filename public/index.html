@@ -32,6 +32,38 @@
       <span id="cacheLabel"></span>
       <div class="cache-bar" id="cacheBar"><div class="cache-bar-fill" id="cacheBarFill"></div></div>
     </div>
+
+    <div id="accountArea" class="account-area hidden">
+      <button id="accountBtn" class="account-btn" title="Account">
+        <img id="accountAvatar" class="account-avatar" alt="" />
+        <span id="accountDot" class="account-dot" title="Drive not connected"></span>
+      </button>
+      <div id="accountMenu" class="account-menu hidden">
+        <div class="account-head">
+          <img id="menuAvatar" class="menu-avatar" alt="" />
+          <div class="account-id">
+            <div id="menuName" class="menu-name"></div>
+            <div id="menuEmail" class="menu-email"></div>
+          </div>
+        </div>
+        <div class="account-drive">
+          <div class="drive-row">
+            <span class="drive-label">Google Drive</span>
+            <span id="driveStatePill" class="drive-pill">Checking…</span>
+          </div>
+          <div id="driveFolderRow" class="drive-folder-row hidden">
+            <span class="drive-folder-label">Saving to</span>
+            <span id="driveFolderName" class="drive-folder-name">—</span>
+          </div>
+          <div id="driveQuota" class="drive-quota"></div>
+          <div id="sharedNote" class="shared-note hidden"></div>
+          <button id="connectDriveBtn" class="account-action primary hidden">Connect Google Drive</button>
+          <button id="chooseFolderBtn" class="account-action hidden">Change destination folder</button>
+          <button id="manageMembersBtn" class="account-action hidden">Manage members <span id="memberCountBadge" class="member-badge"></span></button>
+        </div>
+        <button id="signOutBtn" class="account-action ghost">Sign out</button>
+      </div>
+    </div>
   </header>
 
   <main>
@@ -45,7 +77,7 @@
         <div id="watchLaterHomeList" class="continue-list"></div>
       </div>
       <div id="localCache" class="continue-watching hidden">
-        <h2>Local Cache</h2>
+        <h2>My Library <span class="lib-sub">on Google Drive</span></h2>
         <div id="localCacheList" class="cache-files-list"></div>
       </div>
       <div id="partialsInfo" class="continue-watching hidden">
@@ -114,7 +146,60 @@
 
   <div id="toast" class="toast hidden"></div>
 
+  <!-- ===== Login gate ===== -->
+  <div id="authGate" class="auth-gate hidden">
+    <div class="auth-card">
+      <div class="auth-brand">Torento</div>
+      <p class="auth-tagline">Your private projection booth. Search, stream, and store to your own Google Drive.</p>
+      <div id="authError" class="auth-error hidden"></div>
+      <button id="googleSignIn" class="google-btn">
+        <span class="g-mark" aria-hidden="true">G</span>
+        Continue with Google
+      </button>
+      <p id="authNote" class="auth-note">You'll grant access to a single Drive folder that Torento creates — nothing else in your Drive.</p>
+    </div>
+  </div>
+
+  <!-- ===== Folder chooser ===== -->
+  <div id="folderModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <button id="folderModalClose" class="modal-close" title="Close">&times;</button>
+      <h3 class="modal-title">Destination folder</h3>
+      <p class="modal-sub">Downloads are saved into this folder in your Google Drive.</p>
+
+      <div class="folder-create">
+        <input type="text" id="newFolderName" class="modal-input" placeholder="New folder name (e.g. Movies)" />
+        <button id="createFolderBtn" class="account-action primary">Create &amp; use</button>
+      </div>
+
+      <div class="folder-existing">
+        <div class="folder-existing-label">Or reuse a Torento folder</div>
+        <div id="folderList" class="folder-list"><div class="folder-empty">No folders yet.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Members (shared library) ===== -->
+  <div id="membersModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <button id="membersModalClose" class="modal-close" title="Close">&times;</button>
+      <h3 class="modal-title">Share your library</h3>
+      <p class="modal-sub">Add someone's Google email. When they sign in with that account they'll see this same library, streamed from your Drive folder — they can watch and add downloads, but can't remove anything or change your Drive.</p>
+
+      <div class="folder-create">
+        <input type="text" id="newMemberEmail" class="modal-input" placeholder="name@gmail.com" />
+        <button id="addMemberBtn" class="account-action primary">Add</button>
+      </div>
+
+      <div class="folder-existing">
+        <div class="folder-existing-label">People with access</div>
+        <div id="membersList" class="folder-list"><div class="folder-empty">Just you so far.</div></div>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.plyr.io/3.7.8/plyr.js"></script>
+  <script src="/auth.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

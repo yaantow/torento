@@ -9,8 +9,11 @@
   },
   "dependencies": {
     "cheerio": "^1.0.0",
+    "cookie-parser": "^1.4.7",
     "dotenv": "^16.4.0",
     "express": "^4.21.0",
+    "googleapis": "^173.0.0",
+    "jsonwebtoken": "^9.0.3",
     "webtorrent": "^2.5.0"
   },
   "engines": {
