@@ -57,8 +57,10 @@
           </div>
           <div id="driveQuota" class="drive-quota"></div>
           <div id="sharedNote" class="shared-note hidden"></div>
+          <div id="driveTokenWarning" class="drive-token-warning hidden">Drive connection needs to be renewed — uploads are failing.</div>
           <button id="connectDriveBtn" class="account-action primary hidden">Connect Google Drive</button>
           <button id="chooseFolderBtn" class="account-action hidden">Change destination folder</button>
+          <button id="importDriveBtn" class="account-action hidden">Import files from Drive <span id="importCountBadge" class="member-badge"></span></button>
           <button id="manageMembersBtn" class="account-action hidden">Manage members <span id="memberCountBadge" class="member-badge"></span></button>
         </div>
         <button id="signOutBtn" class="account-action ghost">Sign out</button>
@@ -123,6 +125,11 @@
       <div class="player-actions">
         <button id="downloadBtn" class="action-btn hidden">Download</button>
         <button id="copyLinkBtn" class="action-btn hidden">Copy Stream Link</button>
+        <button id="subtitleBtn" class="action-btn secondary hidden">Load Subtitles</button>
+        <input type="file" id="subtitleFileInput" accept=".srt,.vtt" class="hidden" />
+        <select id="subtitleTrackSelect" class="action-btn secondary hidden"></select>
+        <button id="subtitleSearchBtn" class="action-btn secondary hidden">Search Subtitles Online</button>
+        <button id="subtitleStyleBtn" class="action-btn secondary hidden">Subtitle Style</button>
       </div>
       <div id="torrentStatus" class="torrent-status"></div>
     </div>
@@ -176,6 +183,88 @@
         <div class="folder-existing-label">Or reuse a Torento folder</div>
         <div id="folderList" class="folder-list"><div class="folder-empty">No folders yet.</div></div>
       </div>
+    </div>
+  </div>
+
+  <!-- ===== Subtitle search (OpenSubtitles) ===== -->
+  <div id="subtitleSearchModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <button id="subtitleSearchModalClose" class="modal-close" title="Close">&times;</button>
+      <h3 class="modal-title">Search subtitles online</h3>
+      <p class="modal-sub">Powered by OpenSubtitles — a free-tier key, so daily downloads are limited.</p>
+
+      <div class="folder-create">
+        <input type="text" id="subtitleSearchInput" class="modal-input" placeholder="Movie or show title" />
+        <button id="subtitleSearchGoBtn" class="account-action primary">Search</button>
+      </div>
+
+      <div class="folder-existing">
+        <div class="folder-existing-label">Results</div>
+        <div id="subtitleSearchResults" class="folder-list"><div class="folder-empty">Search to see results.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Subtitle appearance ===== -->
+  <div id="subtitleStyleModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <button id="subtitleStyleModalClose" class="modal-close" title="Close">&times;</button>
+      <h3 class="modal-title">Subtitle appearance</h3>
+      <p class="modal-sub">Saved on this device — applies to every video.</p>
+
+      <div class="folder-existing-label">Size</div>
+      <div class="subtitle-style-row" id="subtitleSizeRow">
+        <button class="subtitle-style-opt" data-size="16">Small</button>
+        <button class="subtitle-style-opt" data-size="20">Medium</button>
+        <button class="subtitle-style-opt" data-size="26">Large</button>
+        <button class="subtitle-style-opt" data-size="34">X-Large</button>
+        <button class="subtitle-style-opt" data-size="44">XX-Large</button>
+      </div>
+
+      <div class="folder-existing-label">Text color</div>
+      <div class="subtitle-style-row" id="subtitleColorRow">
+        <button class="subtitle-swatch" data-color="#e8eaf2" style="background:#e8eaf2" title="White"></button>
+        <button class="subtitle-swatch" data-color="#f5b544" style="background:#f5b544" title="Gold"></button>
+        <button class="subtitle-swatch" data-color="#ffe066" style="background:#ffe066" title="Yellow"></button>
+        <button class="subtitle-swatch" data-color="#5ec8f0" style="background:#5ec8f0" title="Cyan"></button>
+        <button class="subtitle-swatch" data-color="#4ec9a0" style="background:#4ec9a0" title="Green"></button>
+        <button class="subtitle-swatch" data-color="#ff6b6b" style="background:#ff6b6b" title="Red"></button>
+        <button class="subtitle-swatch" data-color="#ff9f45" style="background:#ff9f45" title="Orange"></button>
+        <button class="subtitle-swatch" data-color="#e07af0" style="background:#e07af0" title="Pink"></button>
+        <button class="subtitle-swatch" data-color="#9aa1b4" style="background:#9aa1b4" title="Gray"></button>
+        <button class="subtitle-swatch" data-color="#1a1204" style="background:#1a1204" title="Black"></button>
+        <input type="color" id="subtitleColorCustom" class="subtitle-swatch subtitle-swatch-custom" value="#e8eaf2" title="Custom color" />
+      </div>
+
+      <div class="folder-existing-label">Background</div>
+      <div class="subtitle-style-row" id="subtitleBgRow">
+        <button class="subtitle-style-opt" data-bg="0">None</button>
+        <button class="subtitle-style-opt" data-bg="0.4">Light</button>
+        <button class="subtitle-style-opt" data-bg="0.82">Dark</button>
+        <button class="subtitle-style-opt" data-bg="1">Solid</button>
+      </div>
+
+      <div class="folder-existing-label">Vertical position</div>
+      <div class="subtitle-slider-row">
+        <span class="subtitle-slider-hint">Bottom</span>
+        <input type="range" id="subtitleOffsetSlider" min="-40" max="280" step="10" value="0" />
+        <span class="subtitle-slider-hint">Higher</span>
+      </div>
+      <div class="subtitle-slider-readout">
+        <span id="subtitleOffsetValue">0px</span>
+        <button id="subtitleOffsetResetBtn" class="subtitle-style-opt">Reset position</button>
+      </div>
+
+      <div class="folder-existing-label">Font</div>
+      <p class="modal-sub" id="subtitleFontLabel" style="margin-top: -4px;">Using: default</p>
+      <div class="subtitle-style-row">
+        <button id="subtitleFontUploadBtn" class="account-action">Upload font file</button>
+        <button id="subtitleFontResetBtn" class="subtitle-style-opt">Use default</button>
+        <input type="file" id="subtitleFontInput" accept=".ttf,.otf,.woff,.woff2" class="hidden" />
+      </div>
+      <p class="modal-sub">.ttf, .otf, .woff or .woff2 — stored on this device only.</p>
+
+      <button id="subtitleStyleResetBtn" class="account-action" style="margin-top: 4px;">Reset all to default</button>
     </div>
   </div>
 

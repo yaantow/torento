@@ -59,6 +59,30 @@
   const queueBack = $('#queueBack');
   const downloadBtn = $('#downloadBtn');
   const copyLinkBtn = $('#copyLinkBtn');
+  const subtitleBtn = $('#subtitleBtn');
+  const subtitleFileInput = $('#subtitleFileInput');
+  const subtitleTrackSelect = $('#subtitleTrackSelect');
+  const subtitleSearchBtn = $('#subtitleSearchBtn');
+  const subtitleSearchModal = $('#subtitleSearchModal');
+  const subtitleSearchModalClose = $('#subtitleSearchModalClose');
+  const subtitleSearchInput = $('#subtitleSearchInput');
+  const subtitleSearchGoBtn = $('#subtitleSearchGoBtn');
+  const subtitleSearchResults = $('#subtitleSearchResults');
+  const subtitleStyleBtn = $('#subtitleStyleBtn');
+  const subtitleStyleModal = $('#subtitleStyleModal');
+  const subtitleStyleModalClose = $('#subtitleStyleModalClose');
+  const subtitleSizeRow = $('#subtitleSizeRow');
+  const subtitleColorRow = $('#subtitleColorRow');
+  const subtitleBgRow = $('#subtitleBgRow');
+  const subtitleStyleResetBtn = $('#subtitleStyleResetBtn');
+  const subtitleColorCustom = $('#subtitleColorCustom');
+  const subtitleOffsetSlider = $('#subtitleOffsetSlider');
+  const subtitleOffsetValue = $('#subtitleOffsetValue');
+  const subtitleOffsetResetBtn = $('#subtitleOffsetResetBtn');
+  const subtitleFontLabel = $('#subtitleFontLabel');
+  const subtitleFontUploadBtn = $('#subtitleFontUploadBtn');
+  const subtitleFontResetBtn = $('#subtitleFontResetBtn');
+  const subtitleFontInput = $('#subtitleFontInput');
   const toast = $('#toast');
   const magnetInput = $('#magnetInput');
   const magnetBtn = $('#magnetBtn');
@@ -86,6 +110,10 @@
     downloadBtn.classList.add('hidden');
     downloadBtn.textContent = 'Download';
     copyLinkBtn.classList.add('hidden');
+    subtitleBtn.classList.add('hidden');
+    subtitleSearchBtn.classList.add('hidden');
+    subtitleStyleBtn.classList.add('hidden');
+    clearSubtitleTracks();
     torrentCached = false;
     state.playerMovie = null;
     state.currentInfoHash = null;
@@ -167,15 +195,19 @@
 
       queueList.innerHTML = items.length === 0
         ? '<div class="torrent-files-empty">No items in queue. Click the &#128229; button next to any torrent to queue it for download.</div>'
-        : items.map(item => `
+        : items.map(item => {
+          const canPlay = item.status === 'stored' || item.hasLocal;
+          const playLocalOnly = canPlay && item.status !== 'stored';
+          return `
           <div class="queue-item">
             <span class="queue-item-name">${esc(item.fileName || item.title)}</span>
-            <span class="queue-item-status ${item.status}">${item.status === 'cached' ? 'Cached' : item.status === 'error' ? 'Error' : (Number(item.progress) || 0).toFixed(1) + '%'}</span>
+            <span class="queue-item-status ${item.status}">${item.status === 'stored' ? 'Stored' : item.status === 'error' ? 'Error' : item.status === 'uploading' ? 'Uploading' : (Number(item.progress) || 0).toFixed(1) + '%'}</span>
             ${item.status === 'downloading' ? `<div class="queue-progress"><div class="queue-progress-fill" style="width:${item.progress}%"></div></div>` : ''}
-            ${item.status === 'cached' ? `<button class="play-btn queue-play-btn" data-infohash="${esc(item.infoHash)}" data-magnet="${esc(item.magnet||'')}" data-fileindex="${item.fileIndex ?? 0}" data-filename="${esc(item.fileName || 'cached-video')}">Play</button>` : ''}
+            ${canPlay ? `<button class="play-btn queue-play-btn${playLocalOnly ? ' local-play' : ''}" title="${playLocalOnly ? 'Play from this device — not yet backed up to Drive' : 'Play from Drive'}" data-infohash="${esc(item.infoHash)}" data-magnet="${esc(item.magnet||'')}" data-fileindex="${item.fileIndex ?? 0}" data-filename="${esc(item.fileName || 'cached-video')}">Play</button>` : ''}
             <button class="queue-delete-btn" data-infohash="${esc(item.infoHash)}">Delete</button>
           </div>
-        `).join('');
+        `;
+        }).join('');
 
       queueList.querySelectorAll('.queue-play-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
@@ -188,6 +220,9 @@
             infoHash: null, title: fn, poster: null,
           }, magnet);
           copyLinkBtn.classList.remove('hidden');
+          subtitleBtn.classList.remove('hidden');
+          subtitleSearchBtn.classList.remove('hidden');
+          subtitleStyleBtn.classList.remove('hidden');
           downloadBtn.classList.remove('hidden');
           torrentCached = true;
           updateDownloadButton();
@@ -231,6 +266,7 @@
   }
   // Let the auth controller surface toasts through the same UI.
   window.__torentoToast = showToast;
+  window.__torentoRefreshLibrary = () => { renderLocalCache(); renderDownloadsHome(); updateCacheStatus(); };
 
   function renderFilePanel(panel, files, infoHash, magnet, meta) {
     panel.innerHTML = files.map(f => `
@@ -257,6 +293,7 @@
         const mg = fbtn.dataset.magnet;
         if (plyrInstance) { plyrInstance.destroy(); plyrInstance = null; }
         videoPlayer.src = '';
+        clearSubtitleTracks();
         showSection('player');
         startStream(ih, { index: idx, name }, {
           infoHash: null,
@@ -264,6 +301,9 @@
           poster: meta?.poster || null,
         }, mg);
         copyLinkBtn.classList.remove('hidden');
+          subtitleBtn.classList.remove('hidden');
+          subtitleSearchBtn.classList.remove('hidden');
+          subtitleStyleBtn.classList.remove('hidden');
         downloadBtn.classList.remove('hidden');
         // Check if this specific file is already cached on the server
         try {
@@ -313,6 +353,368 @@
     torrentStatus.innerHTML = '<span style="color: var(--accent)">Playing</span>';
   });
 
+  // --- Subtitles (Tier 1: manual file picker) ---------------------------
+  let subtitleObjectUrl = null;
+
+  // Removes the active <track> only — leaves the bundled-subtitle dropdown's
+  // populated options alone, so toggling "Off" doesn't lose the other choices.
+  function detachSubtitleTrack() {
+    videoPlayer.querySelectorAll('track').forEach((t) => t.remove());
+    if (subtitleObjectUrl) { URL.revokeObjectURL(subtitleObjectUrl); subtitleObjectUrl = null; }
+  }
+
+  // Full reset for switching to a different video entirely.
+  function clearSubtitleTracks() {
+    detachSubtitleTrack();
+    subtitleTrackSelect.classList.add('hidden');
+    subtitleTrackSelect.innerHTML = '';
+    bundledSubtitleCandidates = [];
+  }
+
+  // Cue-identifier lines (bare numbers) before a timestamp line are valid in
+  // both formats, so only the timestamp separator and header actually differ.
+  function srtToVtt(srtText) {
+    const body = srtText.replace(/\r+/g, '').trim().replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
+    return `WEBVTT\n\n${body}\n`;
+  }
+
+  // Plyr's `captions.update` config (set once, at construction, on every
+  // Plyr instance below) makes it listen for the native `addtrack`/
+  // `removetrack` events a <track> element fires on videoPlayer.textTracks —
+  // so just mutating the DOM is enough; Plyr's caption menu updates itself.
+  // (Destroying and rebuilding the Plyr wrapper to "refresh" tracks — the
+  // previous approach here — doesn't work: Plyr's destroy() swaps the live
+  // video element for a clone it made once at construction, before any
+  // track existed, which detaches videoPlayer from the document and leaves
+  // a second `new Plyr(videoPlayer)` silently no-op since Plyr refuses to
+  // set up twice on the same element. That's what broke the layout.)
+  function attachSubtitleFromVtt(vttText, label) {
+    detachSubtitleTrack();
+    subtitleObjectUrl = URL.createObjectURL(new Blob([vttText], { type: 'text/vtt' }));
+
+    const track = document.createElement('track');
+    track.kind = 'subtitles';
+    track.label = label;
+    track.srclang = 'en';
+    track.default = true;
+    track.src = subtitleObjectUrl;
+    videoPlayer.appendChild(track);
+
+    try { plyrInstance?.toggleCaptions(true); } catch {}
+  }
+
+  async function loadSubtitleFile(file) {
+    try {
+      const text = await file.text();
+      const isSrt = /\.srt$/i.test(file.name) || !/^﻿?WEBVTT/i.test(text.trim());
+      const label = file.name.replace(/\.(srt|vtt)$/i, '');
+      attachSubtitleFromVtt(isSrt ? srtToVtt(text) : text, label);
+      subtitleTrackSelect.value = '';
+      saveSubtitleChoice(state.currentInfoHash, { kind: 'manual', label });
+      showToast(`Subtitles loaded: ${label}`);
+    } catch (e) {
+      showToast('Failed to load subtitle file: ' + e.message);
+    }
+  }
+
+  subtitleBtn.addEventListener('click', () => subtitleFileInput.click());
+  subtitleFileInput.addEventListener('change', () => {
+    const file = subtitleFileInput.files[0];
+    subtitleFileInput.value = '';
+    if (file) loadSubtitleFile(file);
+  });
+
+  // Remembers the last subtitle choice per movie (infoHash). Only the
+  // "bundled" kind is safe to auto-reapply on resume — it costs nothing to
+  // re-fetch from a still-live torrent. Manual uploads can't be restored
+  // (the file isn't on disk anywhere), and online results are remembered but
+  // never silently re-downloaded, since that would burn the free-tier quota
+  // every time a movie gets resumed.
+  const SUBTITLE_CHOICE_KEY = 'torento_subtitle_choice';
+  const MAX_SUBTITLE_CHOICES = 40;
+
+  function loadSubtitleChoices() {
+    try { return JSON.parse(localStorage.getItem(SUBTITLE_CHOICE_KEY)) || {}; } catch { return {}; }
+  }
+
+  function saveSubtitleChoice(infoHash, choice) {
+    if (!infoHash) return;
+    const map = loadSubtitleChoices();
+    map[infoHash] = { ...choice, time: Date.now() };
+    const trimmed = Object.fromEntries(
+      Object.entries(map).sort((a, b) => (b[1].time || 0) - (a[1].time || 0)).slice(0, MAX_SUBTITLE_CHOICES)
+    );
+    try { localStorage.setItem(SUBTITLE_CHOICE_KEY, JSON.stringify(trimmed)); } catch {}
+  }
+
+  function getSubtitleChoice(infoHash) {
+    return (infoHash && loadSubtitleChoices()[infoHash]) || null;
+  }
+
+  // --- Subtitles (Tier 2: bundled-in-torrent auto-detect) ----------------
+  let bundledSubtitleCandidates = [];
+
+  async function checkBundledSubtitles(infoHash) {
+    clearSubtitleTracks();
+    if (!infoHash) return;
+
+    try {
+      const resp = await fetch(`/api/torrent/${infoHash}/files`);
+      const data = await resp.json();
+      const subs = (data.files || []).filter((f) => /\.(srt|vtt)$/i.test(f.name));
+      if (subs.length === 0) return;
+
+      bundledSubtitleCandidates = subs;
+      subtitleTrackSelect.appendChild(new Option('Subtitles: Off', ''));
+      subs.forEach((s, i) => subtitleTrackSelect.appendChild(new Option(s.name, String(i))));
+      subtitleTrackSelect.classList.remove('hidden');
+
+      const remembered = getSubtitleChoice(infoHash);
+      if (remembered?.kind === 'bundled') {
+        const idx = subs.findIndex((s) => s.index === remembered.fileIndex || s.name === remembered.name);
+        if (idx !== -1) {
+          subtitleTrackSelect.value = String(idx);
+          attachBundledSubtitle(infoHash, subs[idx]);
+        }
+        return;
+      }
+      // A prior manual/online/off choice for this movie — respect it instead
+      // of auto-picking a bundled track underneath it.
+      if (remembered) return;
+
+      if (subs.length === 1) {
+        subtitleTrackSelect.value = '0';
+        attachBundledSubtitle(infoHash, subs[0]);
+      }
+    } catch {
+      // No active torrent (e.g. resumed from disk/Drive with the torrent
+      // long gone) — silently skip, tier-1 manual upload still works.
+    }
+  }
+
+  async function attachBundledSubtitle(infoHash, sub) {
+    try {
+      const resp = await fetch(`/subtitle/${infoHash}/file/${sub.index}`);
+      if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).error || 'request failed');
+      attachSubtitleFromVtt(await resp.text(), sub.name.replace(/\.(srt|vtt)$/i, ''));
+      saveSubtitleChoice(infoHash, { kind: 'bundled', fileIndex: sub.index, name: sub.name });
+    } catch (e) {
+      showToast('Failed to load bundled subtitle: ' + e.message);
+    }
+  }
+
+  subtitleTrackSelect.addEventListener('change', () => {
+    const val = subtitleTrackSelect.value;
+    if (val === '') {
+      detachSubtitleTrack();
+      try { plyrInstance?.toggleCaptions(false); } catch {}
+      saveSubtitleChoice(state.currentInfoHash, { kind: 'off' });
+      return;
+    }
+    const sub = bundledSubtitleCandidates[parseInt(val, 10)];
+    if (sub) attachBundledSubtitle(state.currentInfoHash, sub);
+  });
+
+  // --- Subtitles (Tier 3: online search via OpenSubtitles) ---------------
+  subtitleSearchBtn.addEventListener('click', () => {
+    subtitleSearchInput.value = playerTitle.textContent || '';
+    subtitleSearchResults.innerHTML = '<div class="folder-empty">Search to see results.</div>';
+    subtitleSearchModal.classList.remove('hidden');
+    subtitleSearchInput.focus();
+  });
+  subtitleSearchModalClose.addEventListener('click', () => subtitleSearchModal.classList.add('hidden'));
+  subtitleSearchModal.addEventListener('click', (e) => { if (e.target === subtitleSearchModal) subtitleSearchModal.classList.add('hidden'); });
+
+  async function runSubtitleSearch() {
+    const q = subtitleSearchInput.value.trim();
+    if (!q) return;
+    subtitleSearchResults.innerHTML = '<div class="torrent-files-loading">Searching…</div>';
+    try {
+      const resp = await fetch(`/api/subtitles/search?query=${encodeURIComponent(q)}`);
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'Search failed');
+
+      const results = data.results || [];
+      if (results.length === 0) {
+        subtitleSearchResults.innerHTML = '<div class="folder-empty">No subtitles found.</div>';
+        return;
+      }
+
+      subtitleSearchResults.innerHTML = results.map((r, i) => `
+        <button class="folder-item subtitle-search-pick" data-index="${i}">
+          <span class="folder-ico">${esc((r.language || '?').toUpperCase())}</span>
+          <span class="folder-nm">${esc(r.release || r.fileName)}</span>
+        </button>
+      `).join('');
+      subtitleSearchResults.querySelectorAll('.subtitle-search-pick').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const r = results[parseInt(btn.dataset.index, 10)];
+          if (r) downloadOnlineSubtitle(r);
+        });
+      });
+    } catch (e) {
+      subtitleSearchResults.innerHTML = `<div class="folder-empty">${esc(e.message)}</div>`;
+    }
+  }
+  subtitleSearchGoBtn.addEventListener('click', runSubtitleSearch);
+  subtitleSearchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') runSubtitleSearch(); });
+
+  async function downloadOnlineSubtitle(result) {
+    const label = result.release || result.fileName.replace(/\.(srt|vtt)$/i, '');
+    try {
+      const resp = await fetch(`/api/subtitles/download/${encodeURIComponent(result.fileId)}`);
+      if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).error || 'Download failed');
+      attachSubtitleFromVtt(await resp.text(), label);
+      subtitleTrackSelect.value = '';
+      saveSubtitleChoice(state.currentInfoHash, { kind: 'online', fileId: result.fileId, label });
+      subtitleSearchModal.classList.add('hidden');
+      showToast(`Subtitles loaded: ${label}`);
+    } catch (e) {
+      showToast('Failed to fetch subtitle: ' + e.message);
+    }
+  }
+
+  // --- Subtitles: appearance (size / color / background / position / font) -
+  const SUBTITLE_STYLE_KEY = 'torento_subtitle_style';
+  const SUBTITLE_STYLE_DEFAULT = { size: '20', color: '#e8eaf2', bg: '0.82', offset: '0', font: null };
+  const CUSTOM_FONT_FAMILY = 'TorentoCustomSubtitleFont';
+
+  function loadSubtitleStyle() {
+    try { return { ...SUBTITLE_STYLE_DEFAULT, ...JSON.parse(localStorage.getItem(SUBTITLE_STYLE_KEY)) }; }
+    catch { return { ...SUBTITLE_STYLE_DEFAULT }; }
+  }
+
+  function applySubtitleStyle(style) {
+    player.style.setProperty('--caption-size', `${style.size}px`);
+    player.style.setProperty('--caption-color', style.color);
+    player.style.setProperty('--caption-bg-opacity', style.bg);
+    player.style.setProperty('--caption-offset', `${style.offset}px`);
+    if (style.font) player.style.setProperty('--caption-font-family', `"${style.font}"`);
+    else player.style.removeProperty('--caption-font-family');
+
+    subtitleSizeRow.querySelectorAll('.subtitle-style-opt').forEach((b) => b.classList.toggle('active', b.dataset.size === String(style.size)));
+    subtitleColorRow.querySelectorAll('button.subtitle-swatch').forEach((b) => b.classList.toggle('active', b.dataset.color === style.color));
+    subtitleBgRow.querySelectorAll('.subtitle-style-opt').forEach((b) => b.classList.toggle('active', b.dataset.bg === String(style.bg)));
+    subtitleColorCustom.value = /^#[0-9a-f]{6}$/i.test(style.color) ? style.color : '#e8eaf2';
+    subtitleOffsetSlider.value = style.offset;
+    subtitleOffsetValue.textContent = `${style.offset}px`;
+    subtitleFontLabel.textContent = style.font ? 'Using: custom font' : 'Using: default';
+  }
+
+  function saveSubtitleStyle(patch) {
+    const style = { ...loadSubtitleStyle(), ...patch };
+    try { localStorage.setItem(SUBTITLE_STYLE_KEY, JSON.stringify(style)); } catch {}
+    applySubtitleStyle(style);
+  }
+
+  // Custom fonts are stored as a Blob in IndexedDB (fonts can be a few
+  // hundred KB — too big to comfortably base64 into localStorage) and
+  // re-registered with the FontFace API on every page load.
+  const FONT_DB_NAME = 'torento-subtitle-font';
+  const FONT_STORE = 'fonts';
+
+  function openFontDB() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(FONT_DB_NAME, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(FONT_STORE);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function saveFontBlob(blob) {
+    const db = await openFontDB();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(FONT_STORE, 'readwrite');
+      tx.objectStore(FONT_STORE).put(blob, 'custom');
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  function loadFontBlob() {
+    return openFontDB().then((db) => new Promise((resolve, reject) => {
+      const tx = db.transaction(FONT_STORE, 'readonly');
+      const req = tx.objectStore(FONT_STORE).get('custom');
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    }));
+  }
+
+  async function deleteFontBlob() {
+    const db = await openFontDB();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(FONT_STORE, 'readwrite');
+      tx.objectStore(FONT_STORE).delete('custom');
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async function registerCustomFont(blob) {
+    const face = new FontFace(CUSTOM_FONT_FAMILY, await blob.arrayBuffer());
+    await face.load();
+    document.fonts.add(face);
+  }
+
+  subtitleStyleBtn.addEventListener('click', () => subtitleStyleModal.classList.remove('hidden'));
+  subtitleStyleModalClose.addEventListener('click', () => subtitleStyleModal.classList.add('hidden'));
+  subtitleStyleModal.addEventListener('click', (e) => { if (e.target === subtitleStyleModal) subtitleStyleModal.classList.add('hidden'); });
+
+  subtitleSizeRow.querySelectorAll('.subtitle-style-opt').forEach((btn) => {
+    btn.addEventListener('click', () => saveSubtitleStyle({ size: btn.dataset.size }));
+  });
+  subtitleColorRow.querySelectorAll('button.subtitle-swatch').forEach((btn) => {
+    btn.addEventListener('click', () => saveSubtitleStyle({ color: btn.dataset.color }));
+  });
+  subtitleColorCustom.addEventListener('input', () => saveSubtitleStyle({ color: subtitleColorCustom.value }));
+  subtitleBgRow.querySelectorAll('.subtitle-style-opt').forEach((btn) => {
+    btn.addEventListener('click', () => saveSubtitleStyle({ bg: btn.dataset.bg }));
+  });
+
+  subtitleOffsetSlider.addEventListener('input', () => {
+    subtitleOffsetValue.textContent = `${subtitleOffsetSlider.value}px`;
+    player.style.setProperty('--caption-offset', `${subtitleOffsetSlider.value}px`);
+  });
+  subtitleOffsetSlider.addEventListener('change', () => saveSubtitleStyle({ offset: subtitleOffsetSlider.value }));
+  subtitleOffsetResetBtn.addEventListener('click', () => saveSubtitleStyle({ offset: SUBTITLE_STYLE_DEFAULT.offset }));
+
+  subtitleFontUploadBtn.addEventListener('click', () => subtitleFontInput.click());
+  subtitleFontInput.addEventListener('change', async () => {
+    const file = subtitleFontInput.files[0];
+    subtitleFontInput.value = '';
+    if (!file) return;
+    try {
+      await registerCustomFont(file);
+      await saveFontBlob(file);
+      saveSubtitleStyle({ font: CUSTOM_FONT_FAMILY });
+      showToast(`Subtitle font loaded: ${file.name}`);
+    } catch (e) {
+      showToast('Failed to load font: ' + e.message);
+    }
+  });
+  subtitleFontResetBtn.addEventListener('click', async () => {
+    try { await deleteFontBlob(); } catch {}
+    saveSubtitleStyle({ font: null });
+  });
+
+  subtitleStyleResetBtn.addEventListener('click', async () => {
+    try { await deleteFontBlob(); } catch {}
+    saveSubtitleStyle(SUBTITLE_STYLE_DEFAULT);
+  });
+
+  (async () => {
+    const style = loadSubtitleStyle();
+    if (style.font === CUSTOM_FONT_FAMILY) {
+      try {
+        const blob = await loadFontBlob();
+        if (blob) await registerCustomFont(blob);
+        else style.font = null;
+      } catch { style.font = null; }
+    }
+    applySubtitleStyle(style);
+  })();
+
   function startStream(infoHash, file, continueInfo, magnet) {
     const streamUrl = `/stream/${infoHash}/file/${file.index}/${encodeURIComponent(file.name)}`;
 
@@ -323,10 +725,12 @@
     if (plyrInstance) plyrInstance.destroy();
     plyrInstance = null;
     videoPlayer.src = '';
+    clearSubtitleTracks();
     videoPlayer.src = streamUrl;
     plyrInstance = new Plyr(videoPlayer, {
       controls: ['play-large','play','progress','current-time','duration','mute','volume','captions','settings','pip','airplay','fullscreen'],
-      settings: ['speed','quality'],
+      settings: ['speed','quality','captions'],
+      captions: { active: true, update: true },
       speed: { selected: 1, options: [0.5,0.75,1,1.25,1.5,2] },
     });
 
@@ -338,6 +742,7 @@
 
     plyrInstance.play().catch((e) => { torrentStatus.innerHTML = `<span style="color: #f88;">${esc(e.message)}</span>`; });
     startTorrentPolling(infoHash);
+    checkBundledSubtitles(infoHash);
 
     const displayTitle = continueInfo?.title || file.name;
     playerTitle.textContent = displayTitle;
@@ -367,6 +772,9 @@
     if (plyrInstance) { plyrInstance.destroy(); plyrInstance = null; }
     torrentStatus.innerHTML = '<span>Resuming...</span>';
     copyLinkBtn.classList.remove('hidden');
+          subtitleBtn.classList.remove('hidden');
+          subtitleSearchBtn.classList.remove('hidden');
+          subtitleStyleBtn.classList.remove('hidden');
     downloadBtn.classList.remove('hidden');
     state.currentInfoHash = item.infoHash || null;
     playerTitle.textContent = item.title || item.fileName || '';
@@ -407,11 +815,13 @@
       updateDownloadButton();
       plyrInstance = null;
       videoPlayer.src = '';
+      clearSubtitleTracks();
       videoPlayer.src = streamUrl;
 
       plyrInstance = new Plyr(videoPlayer, {
         controls: ['play-large','play','progress','current-time','duration','mute','volume','captions','settings','pip','airplay','fullscreen'],
-        settings: ['speed','quality'],
+        settings: ['speed','quality','captions'],
+        captions: { active: true, update: true },
         speed: { selected: 1, options: [0.5,0.75,1,1.25,1.5,2] },
       });
 
@@ -429,6 +839,7 @@
 
       plyrInstance.play().catch((e) => { torrentStatus.innerHTML = `<span style="color: #f88;">${esc(e.message)}</span>`; });
       startTorrentPolling(item.infoHash || state.currentInfoHash);
+      checkBundledSubtitles(item.infoHash || state.currentInfoHash);
 
       let lastSave = 0;
       plyrInstance.on('timeupdate', () => {
@@ -462,6 +873,7 @@
 
     if (plyrInstance) { plyrInstance.destroy(); plyrInstance = null; }
     videoPlayer.src = '';
+    clearSubtitleTracks();
 
     try {
       const resp = await fetch(`/api/search?q=${encodeURIComponent(q)}&source=${source}`);
@@ -957,13 +1369,16 @@
           sizeLabel = `${pct}%`;
         }
         const isStored = st === 'stored';
-        const playDisabled = isStored ? '' : ' disabled';
+        const canPlay = isStored || f.hasLocal;
+        const playLocalOnly = canPlay && !isStored;
+        const playDisabled = canPlay ? '' : ' disabled';
+        const playTitle = isStored ? 'Play from Drive' : playLocalOnly ? 'Play from this device — not yet backed up to Drive' : 'Available once saved to Drive';
         return `
         <div class="cache-file-item" data-infohash="${esc(f.infoHash)}" data-filename="${esc(f.fileName)}" data-magnet="${esc(f.magnet || '')}" data-fileindex="${f.fileIndex !== null && f.fileIndex !== undefined ? f.fileIndex : ''}">
           <span class="cache-file-exists ${statusCls}" title="${esc(tip)}">${icon}</span>
           <span class="cache-file-name">${esc(f.fileName)}</span>
           <span class="cache-file-size">${sizeLabel}</span>
-          <button class="play-btn cache-play-btn"${playDisabled} title="${isStored ? 'Play from Drive' : 'Available once saved to Drive'}">Play</button>
+          <button class="play-btn cache-play-btn${playLocalOnly ? ' local-play' : ''}"${playDisabled} title="${esc(playTitle)}">Play</button>
           ${isStored ? `<button class="action-btn secondary cache-dl-btn">Download</button>` : ''}
           ${st === 'error' ? `<button class="action-btn secondary cache-retry-btn" title="Retry this file">&#8635;</button>` : ''}
           <button class="action-btn secondary cache-del-btn" title="Remove from library">&#10005;</button>
@@ -984,6 +1399,9 @@
               infoHash: null, title: fn, poster: null,
             }, '');
             copyLinkBtn.classList.remove('hidden');
+          subtitleBtn.classList.remove('hidden');
+          subtitleSearchBtn.classList.remove('hidden');
+          subtitleStyleBtn.classList.remove('hidden');
             downloadBtn.classList.remove('hidden');
             torrentCached = true;
             updateDownloadButton();
@@ -1118,7 +1536,7 @@
           return `
           <div class="episode-item">
             <div class="ep-label">${epLabel}</div>
-            <div class="ep-options">${sorted.slice(0, 3).map(t => `
+            <div class="ep-options">${sorted.map(t => `
               <div class="ep-torrent-row" data-torrent-id="ep-${ep}-${t.provider}">
                 <span class="torrent-source">${esc(t.provider)}</span>
                 <span class="torrent-size">${esc(t.size||'?')}</span>
@@ -1331,6 +1749,9 @@
     torrentStatus.innerHTML = '<span>Fetching torrent info...</span>';
     downloadBtn.classList.add('hidden');
     copyLinkBtn.classList.remove('hidden');
+          subtitleBtn.classList.remove('hidden');
+          subtitleSearchBtn.classList.remove('hidden');
+          subtitleStyleBtn.classList.remove('hidden');
     state.currentInfoHash = null;
 
     try {
@@ -1365,6 +1786,9 @@
       const firstFile = files[0];
       startStream(data.infoHash, firstFile, continueInfo, playBody.magnet);
       copyLinkBtn.classList.remove('hidden');
+          subtitleBtn.classList.remove('hidden');
+          subtitleSearchBtn.classList.remove('hidden');
+          subtitleStyleBtn.classList.remove('hidden');
       // Check if this specific file is cached (not just the torrent generally)
       try {
         const cr = await fetch('/api/cache');
@@ -1479,6 +1903,10 @@
     downloadBtn.textContent = 'Download';
     torrentCached = false;
     copyLinkBtn.classList.add('hidden');
+    subtitleBtn.classList.add('hidden');
+    subtitleSearchBtn.classList.add('hidden');
+    subtitleStyleBtn.classList.add('hidden');
+    clearSubtitleTracks();
     state.selected = null;
     state.playerMovie = null;
     state.currentInfoHash = null;

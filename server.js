@@ -11,6 +11,8 @@ const transcode = require('./lib/stream/transcode');
 const searchEngine = require('./lib/search');
 const trackers = require('./lib/search/trackers');
 const VIDEO_EXTS = require('./lib/videoExts');
+const subtitles = require('./lib/subtitles');
+const opensubtitles = require('./lib/opensubtitles');
 
 const oauth = require('./lib/auth/oauth');
 const users = require('./lib/auth/users');
@@ -112,9 +114,18 @@ app.get('/api/drive/status', session.requireAuth, async (req, res) => {
   const isOwner = ownerId === req.user.id;
   const connected = users.hasDriveConnection(ownerId);
   let storage = null;
-  if (connected && isOwner) storage = await drive.getStorageInfo(ownerId);
+  let tokenValid = false;
+  let tokenError = null;
+  if (connected) {
+    const check = await drive.checkConnection(ownerId);
+    tokenValid = check.ok;
+    tokenError = check.ok ? null : check.error;
+    if (tokenValid && isOwner) storage = await drive.getStorageInfo(ownerId);
+  }
   res.json({
     connected,
+    tokenValid,
+    tokenError,
     isOwner,
     sharedBy: isOwner ? null : (owner ? (owner.name || owner.email) : null),
     folder: owner && owner.driveFolderId ? { id: owner.driveFolderId, name: owner.driveFolderName } : null,
@@ -122,6 +133,64 @@ app.get('/api/drive/status', session.requireAuth, async (req, res) => {
     pickerEnabled: !!config.drive.pickerApiKey,
     storage,
   });
+});
+
+/**
+ * Files that physically exist in the owner's Drive folder but aren't tracked
+ * in this space's queue — e.g. items whose "Remove from library" delete only
+ * ever cleared our own record (deleteDrive wasn't passed), leaving the file
+ * orphaned in Drive with the app none the wiser.
+ */
+app.get('/api/drive/reconcile', session.requireAuth, session.requireOwner, async (req, res) => {
+  try {
+    const owner = users.get(req.space.ownerUserId);
+    if (!owner || !owner.driveFolderId) return res.json({ orphaned: [] });
+    const driveFiles = await drive.listAllFiles(req.space.ownerUserId, owner.driveFolderId);
+    const known = new Set();
+    for (const it of queueManager.getItems(req.space.id)) {
+      if (it.driveFileId) known.add(it.driveFileId);
+      for (const id of Object.values(it.driveFiles || {})) known.add(id);
+    }
+    const orphaned = driveFiles
+      .filter(f => !known.has(f.id) && Number(f.size) > 0) // skip 0-byte artifacts from failed uploads
+      .map(f => ({ id: f.id, name: f.name, size: Number(f.size) || 0 }));
+    res.json({ orphaned });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/** Re-adds orphaned Drive files to the library as already-'stored' items. */
+app.post('/api/drive/reconcile', session.requireAuth, session.requireOwner, async (req, res) => {
+  try {
+    const { fileIds } = req.body || {};
+    const owner = users.get(req.space.ownerUserId);
+    if (!owner || !owner.driveFolderId) return res.status(400).json({ error: 'No Drive folder set' });
+    const driveFiles = await drive.listAllFiles(req.space.ownerUserId, owner.driveFolderId);
+    const known = new Set();
+    for (const it of queueManager.getItems(req.space.id)) {
+      if (it.driveFileId) known.add(it.driveFileId);
+      for (const id of Object.values(it.driveFiles || {})) known.add(id);
+    }
+    const wanted = Array.isArray(fileIds) && fileIds.length ? new Set(fileIds) : null;
+
+    let imported = 0;
+    for (const f of driveFiles) {
+      if (known.has(f.id)) continue;
+      if (Number(f.size) <= 0) continue; // skip 0-byte artifacts from failed uploads
+      if (wanted && !wanted.has(f.id)) continue;
+      const infoHash = `drive:${f.id}`;
+      queueManager.addItem(req.space.id, {
+        infoHash, magnet: '', title: f.name, fileIndex: null, fileName: f.name,
+        size: Number(f.size) || 0, driveFolderId: owner.driveFolderId,
+      });
+      queueManager.recordStoredFile(req.space.id, infoHash, f.name, f.id);
+      imported++;
+    }
+    res.json({ imported });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 app.get('/api/drive/folders', session.requireAuth, session.requireOwner, async (req, res) => {
@@ -542,6 +611,70 @@ app.get('/api/torrent/:infoHash/files', session.requireAuth, async (req, res) =>
   }
 });
 
+// Bundled subtitle files (.srt/.vtt) that shipped alongside the video in the
+// torrent. Only available while the torrent is live in the swarm — sibling
+// subtitles aren't persisted to disk/Drive the way video files are, so this
+// won't help for a resumed item whose torrent has since been evicted.
+app.get('/subtitle/:infoHash/file/:fileIndex', session.requireAuth, async (req, res) => {
+  try {
+    const { infoHash, fileIndex } = req.params;
+    const idx = parseInt(fileIndex, 10);
+
+    const magnet = findActiveMagnet(infoHash);
+    if (!magnet) return res.status(404).json({ error: 'Torrent not active' });
+
+    const torrent = await streamEngine.getTorrent(magnet);
+    const file = torrent.files[idx];
+    if (!file) return res.status(404).json({ error: 'File not found' });
+
+    const ext = path.extname(file.name).toLowerCase();
+    if (!subtitles.SUBTITLE_EXTS.includes(ext)) return res.status(400).json({ error: 'Not a subtitle file' });
+
+    // Streaming a video file explicitly deselects every other file (see
+    // getTorrent's fileToKeep logic) to avoid downloading the whole torrent —
+    // re-select this one so its pieces actually come in.
+    file.select();
+
+    const chunks = [];
+    const stream = file.createReadStream();
+    stream.on('data', (c) => chunks.push(c));
+    stream.on('end', () => {
+      const text = Buffer.concat(chunks).toString('utf8');
+      res.set('Content-Type', 'text/vtt; charset=utf-8');
+      res.send(subtitles.toVtt(text, ext));
+    });
+    stream.on('error', (err) => { if (!res.headersSent) res.status(500).json({ error: err.message }); });
+  } catch (err) {
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  }
+});
+
+// Online subtitle search/download (OpenSubtitles). Free-tier keys are rate-
+// limited, so the fetch route only spends a download credit when the user
+// actually picks a result, not while browsing search results.
+app.get('/api/subtitles/search', session.requireAuth, async (req, res) => {
+  try {
+    const { query, language } = req.query;
+    if (!query) return res.status(400).json({ error: 'Missing query' });
+    const results = await opensubtitles.search(query, { languages: language || 'en' });
+    res.json({ results });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+app.get('/api/subtitles/download/:fileId', session.requireAuth, async (req, res) => {
+  try {
+    const { fileId } = req.params;
+    const { text, fileName } = await opensubtitles.download(fileId);
+    const ext = path.extname(fileName).toLowerCase() || '.srt';
+    res.set('Content-Type', 'text/vtt; charset=utf-8');
+    res.send(subtitles.toVtt(text, ext));
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 /* ============================================================
    QUEUE / LIBRARY  (per user)
    ============================================================ */
@@ -575,7 +708,11 @@ app.post('/api/queue', session.requireAuth, async (req, res) => {
 });
 
 app.get('/api/queue', session.requireAuth, (req, res) => {
-  res.json({ items: queueManager.getItems(req.space.id) });
+  const items = queueManager.getItems(req.space.id).map(it => ({
+    ...it,
+    hasLocal: !!cacheManager.getCached(it.infoHash, it.fileName),
+  }));
+  res.json({ items });
 });
 
 app.delete('/api/queue/:infoHash', session.requireAuth, session.requireOwner, async (req, res) => {
@@ -651,6 +788,7 @@ app.get('/api/cache', session.requireAuth, (req, res) => {
     progress: it.progress || 0,
     inDrive: it.status === 'stored',
     verified: it.status === 'stored',
+    hasLocal: !!cacheManager.getCached(it.infoHash, it.fileName),
   }));
   const stored = files.filter(f => f.inDrive);
   const totalSize = stored.reduce((s, f) => s + (f.size || 0), 0);

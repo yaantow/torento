@@ -99,6 +99,7 @@
     $('connectDriveBtn').addEventListener('click', () => { location.href = '/api/auth/login?reconnect=1'; });
     $('chooseFolderBtn').addEventListener('click', openFolderModal);
     $('manageMembersBtn').addEventListener('click', openMembersModal);
+    $('importDriveBtn').addEventListener('click', runImportFromDrive);
     wireFolderModal();
     wireMembersModal();
   }
@@ -110,6 +111,8 @@
     const connectBtn = $('connectDriveBtn');
     const chooseBtn = $('chooseFolderBtn');
     const membersBtn = $('manageMembersBtn');
+    const importBtn = $('importDriveBtn');
+    const tokenWarning = $('driveTokenWarning');
     const folderRow = $('driveFolderRow');
     const sharedNote = $('sharedNote');
     const quota = $('driveQuota');
@@ -120,6 +123,10 @@
 
     const isOwner = s.isOwner;
     document.body.classList.toggle('is-member', !isOwner);
+    // "connected" only means a token is saved; tokenValid means it still
+    // actually works with Google — a saved token can silently die (revoked,
+    // expired, evicted by Google's per-client token cap).
+    const broken = s.connected && !s.tokenValid;
 
     // folder line (same for everyone in the space)
     folderRow.classList.toggle('hidden', !s.connected);
@@ -131,30 +138,55 @@
       membersBtn.classList.remove('hidden');
       const n = (sp && sp.space) ? sp.space.memberCount : 0;
       $('memberCountBadge').textContent = n ? String(n) : '';
-      if (s.connected) {
+
+      if (broken) {
+        pill.textContent = 'Reconnect needed'; pill.className = 'drive-pill warn';
+        dot.classList.remove('ok'); dot.title = 'Drive connection broken — reconnect needed';
+        connectBtn.classList.remove('hidden');
+        connectBtn.textContent = 'Reconnect Google Drive';
+        chooseBtn.classList.remove('hidden');
+        tokenWarning.classList.remove('hidden');
+        tokenWarning.textContent = s.tokenError
+          ? `Drive connection needs to be renewed (${s.tokenError}) — uploads are failing.`
+          : 'Drive connection needs to be renewed — uploads are failing.';
+        quota.textContent = '';
+        checkOrphans(importBtn);
+      } else if (s.connected) {
         pill.textContent = 'Connected'; pill.className = 'drive-pill ok';
         dot.classList.add('ok'); dot.title = 'Drive connected';
         connectBtn.classList.add('hidden');
+        connectBtn.textContent = 'Connect Google Drive';
         chooseBtn.classList.remove('hidden');
+        tokenWarning.classList.add('hidden');
         const q = s.storage && s.storage.quota;
         quota.textContent = q && q.limit ? `${fmtBytes(q.usage)} of ${fmtBytes(q.limit)} used`
           : (q ? `${fmtBytes(q.usage)} used` : '');
+        checkOrphans(importBtn);
       } else {
         pill.textContent = 'Not connected'; pill.className = 'drive-pill warn';
         dot.classList.remove('ok'); dot.title = 'Drive not connected';
         connectBtn.classList.remove('hidden');
+        connectBtn.textContent = 'Connect Google Drive';
         chooseBtn.classList.add('hidden');
+        tokenWarning.classList.add('hidden');
         quota.textContent = '';
+        importBtn.classList.add('hidden');
       }
     } else {
-      // Member: rides on the owner's Drive; no connect/folder/members controls.
+      // Member: rides on the owner's Drive; no connect/folder/members/import controls.
       connectBtn.classList.add('hidden');
       chooseBtn.classList.add('hidden');
       membersBtn.classList.add('hidden');
+      importBtn.classList.add('hidden');
+      tokenWarning.classList.add('hidden');
       quota.textContent = '';
       sharedNote.classList.remove('hidden');
       const owner = s.sharedBy || (sp && sp.space && sp.space.owner ? (sp.space.owner.name || sp.space.owner.email) : 'the owner');
-      if (s.connected) {
+      if (broken) {
+        pill.textContent = 'Reconnect needed'; pill.className = 'drive-pill warn';
+        dot.classList.remove('ok'); dot.title = "Owner's Drive connection is broken";
+        sharedNote.textContent = `${owner}'s Google Drive connection needs to be renewed — ask them to reconnect it.`;
+      } else if (s.connected) {
         pill.textContent = 'Shared'; pill.className = 'drive-pill ok';
         dot.classList.add('ok'); dot.title = 'Shared library';
         sharedNote.textContent = `Shared library from ${owner}'s Google Drive.`;
@@ -163,6 +195,36 @@
         dot.classList.remove('ok'); dot.title = 'Owner has not connected Drive';
         sharedNote.textContent = `${owner} hasn't connected Google Drive yet.`;
       }
+    }
+  }
+
+  // ---- reconcile: files that exist in Drive but aren't in our library records ----
+  async function checkOrphans(importBtn) {
+    try {
+      const { orphaned } = await getJSON('/api/drive/reconcile');
+      if (!orphaned || !orphaned.length) { importBtn.classList.add('hidden'); return; }
+      importBtn.classList.remove('hidden');
+      $('importCountBadge').textContent = String(orphaned.length);
+    } catch { importBtn.classList.add('hidden'); }
+  }
+
+  async function runImportFromDrive() {
+    const importBtn = $('importDriveBtn');
+    const original = importBtn.innerHTML;
+    importBtn.disabled = true;
+    importBtn.textContent = 'Importing…';
+    try {
+      const { imported } = await getJSON('/api/drive/reconcile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      window.__torentoToast && window.__torentoToast(
+        imported ? `Imported ${imported} file(s) from Drive back into your library` : 'Nothing to import — library is already up to date');
+      window.__torentoRefreshLibrary && window.__torentoRefreshLibrary();
+      $('accountMenu').classList.add('hidden');
+      refreshDrive();
+    } catch (e) {
+      window.__torentoToast && window.__torentoToast('Import failed: ' + e.message);
+    } finally {
+      importBtn.disabled = false;
+      importBtn.innerHTML = original;
     }
   }
 

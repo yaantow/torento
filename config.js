@@ -35,15 +35,23 @@ const config = {
     defaultFolder: process.env.DRIVE_DEFAULT_FOLDER || 'Torento',
   },
 
+  opensubtitles: {
+    apiKey: process.env.OPENSUBTITLES_API_KEY || '',
+  },
+
   sources: {
     x1337: {
       enabled: true,
-      domain: process.env.X1337_DOMAIN || '1377x.to',
+      domains: (process.env.X1337_DOMAINS || process.env.X1337_DOMAIN || '1377x.to,1337x.to,1337x.st,1337x.gd')
+        .split(',').map(d => d.trim()).filter(Boolean),
       timeout: 20000,
+      maxPages: parseInt(process.env.X1337_MAX_PAGES, 10) || 3,
     },
     yts: {
       enabled: true,
       timeout: 10000,
+      limit: 50,
+      maxPages: parseInt(process.env.YTS_MAX_PAGES, 10) || 3,
     },
     tpb: {
       enabled: true,
@@ -51,8 +59,10 @@ const config = {
     },
     tgx: {
       enabled: false,
-      domain: process.env.TGX_DOMAIN || 'torrentgalaxy.to',
+      domains: (process.env.TGX_DOMAINS || process.env.TGX_DOMAIN || 'torrentgalaxy.to,torrentgalaxy.mx,tgx.rs')
+        .split(',').map(d => d.trim()).filter(Boolean),
       timeout: 15000,
+      maxPages: parseInt(process.env.TGX_MAX_PAGES, 10) || 3,
     },
   },
 
